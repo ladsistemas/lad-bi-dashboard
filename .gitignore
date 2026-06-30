@@ -1,0 +1,13 @@
+# SO / editores
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+
+# build local de teste (se usar npx serve etc.)
+node_modules/
+.cache/
+
+# artefatos
+*.zip

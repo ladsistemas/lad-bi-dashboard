@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#1a1fa0" />
+  <title>LAD BI · Painel de Indicadores</title>
+  <link rel="icon" type="image/png" href="assets/img/lad-symbol.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+
+<body>
+  <!-- ============================= LOGIN ============================= -->
+  <div id="view-login" class="login-screen">
+    <div class="login-aside">
+      <div class="login-aside-inner">
+        <div class="logo big"><img src="assets/img/lad-symbol.png" alt="LAD FOOD" /></div>
+        <span class="wm wm-lg wm-light"><span class="wm-box">LAD</span><span class="wm-accent">BI</span></span>
+        <h2>Painel de Indicadores</h2>
+        <p>Vendas, garçons, produtos e cancelamentos do seu restaurante — em tempo real, direto da operação.</p>
+        <ul class="login-feats">
+          <li>Ranking de garçons e produtos</li>
+          <li>Cancelamentos por garçom</li>
+          <li>Ticket médio por cliente</li>
+          <li>Filtro por período</li>
+        </ul>
+      </div>
+    </div>
+    <div class="login-main">
+      <form id="login-form" class="login-card" autocomplete="on">
+        <div class="login-head">
+          <span class="wm wm-lg"><span class="wm-box">LAD</span><span class="wm-accent">BI</span></span>
+          <span class="login-sub">Entre com sua conta LADFood</span>
+        </div>
+        <label class="field">
+          <span>E-mail</span>
+          <input id="login-email" type="email" name="email" placeholder="voce@empresa.com.br"
+            autocomplete="username" required />
+        </label>
+        <label class="field">
+          <span>Senha</span>
+          <input id="login-senha" type="password" name="senha" placeholder="••••••••"
+            autocomplete="current-password" required />
+        </label>
+        <p class="login-error" id="login-error" role="alert" aria-live="assertive" hidden></p>
+        <button id="login-submit" type="submit" class="btn-primary">
+          <span class="btn-label">Entrar</span>
+          <span class="btn-spin"></span>
+        </button>
+        <p class="login-foot">Conectado a <code id="login-api"></code></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============================== APP ============================== -->
+  <div id="view-app" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo"><img src="assets/img/lad-symbol.png" alt="LAD FOOD" /></div>
+        <div class="brand-txt">
+          <span class="wm"><span class="wm-box">LAD</span><span class="wm-accent">BI</span></span>
+          <span id="brand-empresa"></span>
+        </div>
+      </div>
+      <div class="top-controls">
+        <div class="empresa-box">
+          <select id="empresa-select" aria-label="Empresa"></select>
+          <small id="empresa-meta"></small>
+        </div>
+        <button id="btn-refresh" class="icon-btn" title="Recarregar">⟳</button>
+        <button id="theme-toggle" class="icon-btn" title="Tema claro/escuro">☾</button>
+        <button id="btn-logout" class="btn-ghost">Sair</button>
+      </div>
+    </header>
+
+    <div class="filterbar">
+      <div class="presets" role="group" aria-label="Período">
+        <button class="chip" data-range="hoje">Hoje</button>
+        <button class="chip" data-range="ontem">Ontem</button>
+        <button class="chip" data-range="7d">7 dias</button>
+        <button class="chip" data-range="30d">30 dias</button>
+        <button class="chip" data-range="mes">Este mês</button>
+        <button class="chip" data-range="mes-1">Mês passado</button>
+      </div>
+      <div class="custom-range">
+        <input id="date-inicio" type="date" aria-label="Data inicial" />
+        <span class="dash">→</span>
+        <input id="date-fim" type="date" aria-label="Data final" />
+        <button id="btn-aplicar" class="btn-soft">Aplicar</button>
+      </div>
+      <div class="periodo-label">Período: <strong id="periodo-label">—</strong></div>
+    </div>
+
+    <main class="content">
+      <!-- KPIs -->
+      <section class="kpi-row">
+        <div class="kpi">
+          <div class="kpi-ic ic-rev">$</div>
+          <div class="kpi-data">
+            <span class="kpi-label">Faturamento</span>
+            <strong class="kpi-value" id="kpi-faturamento">…</strong>
+            <small class="kpi-sub">Vendas líquidas no período</small>
+          </div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-ic ic-cmd">▦</div>
+          <div class="kpi-data">
+            <span class="kpi-label">Comandas</span>
+            <strong class="kpi-value" id="kpi-comandas">…</strong>
+            <small class="kpi-sub">Atendimentos no período</small>
+          </div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-ic ic-tkt">◑</div>
+          <div class="kpi-data">
+            <span class="kpi-label">Ticket médio</span>
+            <strong class="kpi-value" id="kpi-ticket">…</strong>
+            <small class="kpi-sub">Por comanda / atendimento</small>
+          </div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-ic ic-cnc">✕</div>
+          <div class="kpi-data">
+            <span class="kpi-label">Cancelado</span>
+            <strong class="kpi-value" id="kpi-cancelado">…</strong>
+            <small class="kpi-sub" id="kpi-cancelado-sub"></small>
+          </div>
+        </div>
+      </section>
+
+      <div class="grid">
+        <!-- 1. Quanto cada garçom vende -->
+        <section class="card span-8" id="card-vendedores">
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Quanto cada garçom vende</h3>
+              <p class="card-sub">Ranking por valor vendido no período (top 15)</p>
+            </div>
+            <button class="btn-ghost sm" data-export="vendedores">CSV</button>
+          </div>
+          <div class="card-body chart-body"><canvas id="chart-vendedores"></canvas></div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- Formas de pagamento (bônus) -->
+        <section class="card span-4" id="card-formas">
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Formas de pagamento</h3>
+              <p class="card-sub">Recebimentos do período</p>
+            </div>
+          </div>
+          <div class="card-body chart-body"><canvas id="chart-formas"></canvas></div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- 2a. Produtos mais vendidos -->
+        <section class="card span-6" id="card-produtos-top">
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Produtos mais vendidos</h3>
+              <p class="card-sub">Top 10 por valor</p>
+            </div>
+          </div>
+          <div class="card-body chart-body"><canvas id="chart-produtos-top"></canvas></div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- 2b. Produtos menos vendidos -->
+        <section class="card span-6" id="card-produtos-bottom">
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Produtos menos vendidos</h3>
+              <p class="card-sub">Menor giro (inclui itens sem venda)</p>
+            </div>
+          </div>
+          <div class="card-body chart-body"><canvas id="chart-produtos-bottom"></canvas></div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- 3. Garçom que mais cancela -->
+        <section class="card span-12" id="card-cancel">
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Garçom que mais cancela</h3>
+              <p class="card-sub">Valor cancelado e % de cada um (top 15)</p>
+            </div>
+            <button class="btn-ghost sm" data-export="cancel">CSV</button>
+          </div>
+          <div class="card-body chart-body tall"><canvas id="chart-cancel"></canvas></div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- 4. Qual produto cada garçom mais vende -->
+        <section class="card span-7" id="card-produto-vendedor">
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>O produto que cada garçom mais vende</h3>
+              <p class="card-sub">Produto campeão de cada garçom no período</p>
+            </div>
+            <button class="btn-ghost sm" data-export="produto-vendedor">CSV</button>
+          </div>
+          <div class="card-body table-body">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Garçom</th>
+                  <th>Produto mais vendido</th>
+                  <th class="num">Qtd</th>
+                  <th class="num">Valor</th>
+                  <th class="num">Total do garçom</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-produto-vendedor"></tbody>
+            </table>
+          </div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- 5. Ticket médio por cliente -->
+        <section class="card span-5" id="card-conta-cliente">
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Ticket médio por cliente</h3>
+              <p class="card-sub">Clientes do fiado / conta corrente</p>
+            </div>
+            <button class="btn-ghost sm" data-export="conta-cliente">CSV</button>
+          </div>
+          <div class="card-body table-body">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th class="num">Ticket médio</th>
+                  <th class="num">Contas</th>
+                  <th class="num">Total</th>
+                  <th class="num">Em aberto</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-conta-cliente"></tbody>
+            </table>
+          </div>
+          <div class="card-overlay" hidden></div>
+        </section>
+      </div>
+
+      <p class="note">
+        Ticket médio por cliente cobre apenas clientes identificados (fiado/conta corrente). Em mesa e balcão
+        a comanda não registra o cliente, por isso o indicador geral é por comanda/atendimento.
+      </p>
+    </main>
+
+    <footer class="appfoot">
+      LAD BI · Painel estático · dados em tempo real de <code id="foot-api"></code>
+    </footer>
+  </div>
+
+  <!-- Chart.js vendorizado localmente (sem dependencia de CDN, funciona em redes que bloqueiam CDNs).
+       Se o arquivo faltar, as tabelas continuam funcionando. -->
+  <script src="assets/vendor/chart.umd.min.js"></script>
+  <script src="assets/js/config.js"></script>
+  <script src="assets/js/format.js"></script>
+  <script src="assets/js/api.js"></script>
+  <script src="assets/js/charts.js"></script>
+  <script src="assets/js/app.js"></script>
+  <script>
+    // espelha a URL da API no rodape
+    document.addEventListener('DOMContentLoaded', function () {
+      var f = document.getElementById('foot-api');
+      if (f && window.LADBI) f.textContent = LADBI.config.apiBase;
+    });
+  </script>
+</body>
+
+</html>
