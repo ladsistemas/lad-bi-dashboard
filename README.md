@@ -151,12 +151,18 @@ Depois acesse `http://localhost:8080`.
 
 5. Acesse pelo **endpoint do site** (ex.: `http://SEU-BUCKET.s3-website-sa-east-1.amazonaws.com`).
 
-> **HTTPS / domínio próprio:** coloque um **CloudFront** na frente do bucket
-> (ex.: `bi.seudominio.com.br`). Na distribution, defina **Default Root Object: `index.html`** e
-> aponte a **Origin para o endpoint de site do S3** como *Custom Origin*
-> (`http://SEU-BUCKET.s3-website-<regiao>.amazonaws.com`) — não para o endpoint REST do bucket —
-> para preservar o index/error document do passo 2. A API aceita qualquer origem, então o domínio
-> que você escolher já funciona de imediato.
+> **HTTPS / domínio (já provisionado):** o painel está publicado em
+> **https://dashboard.ladfood.com.br** via **CloudFront** (distribution `E1X9PSXB4QAZB1`).
+> A distribution usa **Default Root Object `index.html`**, **Origin = endpoint de site do S3**
+> como *Custom Origin* http-only (`lad-bi-dashboard.s3-website-sa-east-1.amazonaws.com`),
+> **viewer redirect-to-https**, e mapeia 403/404 → `/index.html` (200). Certificado no **ACM (us-east-1)**
+> e alias A/AAAA no **Route53** (`dashboard.ladfood.com.br` na zona `ladfood.com.br`).
+>
+> **Importante:** com o CloudFront na frente, após o `aws s3 sync` invalide o cache para publicar na hora:
+>
+> ```bash
+> aws cloudfront create-invalidation --distribution-id E1X9PSXB4QAZB1 --paths "/*"
+> ```
 
 ---
 
