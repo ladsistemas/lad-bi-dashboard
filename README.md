@@ -18,6 +18,36 @@ Mais 3 indicadores de topo (KPIs): faturamento, comandas, ticket médio e total 
 
 ---
 
+## Configuração por empresa (⚙)
+
+O botão **⚙ (Configurar painel)** no topo abre um painel onde o usuário **liga/desliga** e **reordena** cada gráfico/relatório. A configuração é **salva por empresa** (compartilhada entre os usuários e dispositivos daquela empresa).
+
+- O catálogo de widgets vive em **`assets/js/widgets.js`** (fonte única). Para oferecer um indicador novo: registre nele, crie o card no `index.html` e o loader/render no `app.js`.
+- Widgets ocultos **não** disparam chamadas de API (economia).
+- A config é aplicada na hora (mostra/oculta/reordena) e salva no servidor **+** cache local (`localStorage`). Se o servidor estiver indisponível, ela persiste ao menos neste navegador e o painel continua funcionando.
+
+### Indicadores opcionais já disponíveis (além da base)
+
+| Widget | Endpoint |
+|--------|----------|
+| DRE / Resultado do período | `GET /api/v1/llm/financeiro/dre` |
+| Contas a pagar (fornecedores / em aberto) | `GET /api/v1/llm/financeiro/contas-pagar` |
+| Taxa de serviço por garçom | `GET /api/v1/llm/financeiro/taxa-servico` |
+| Vendas por canal (salão/balcão/delivery) | `GET /api/v1/llm/kds/vendas/analise-canal` |
+| Produtos e motivos mais cancelados | reusa `GET /api/v1/llm/cancelamentos` |
+
+### Onde a config é guardada (backend)
+
+Como o **lad_bi** enxerga apenas a **réplica de leitura**, a **gravação** passa pelo **api-ladfood** (banco principal):
+
+- **`GET /api/v1/llm/dashboard/config?idEmpresa=…`** (lad_bi) — lê `public.bi_dashboard_config` da réplica.
+- **`PUT /api/v1/llm/dashboard/config?idEmpresa=…`** (lad_bi) — valida a permissão do usuário na empresa e **encaminha** a gravação ao **`PUT /ladfood/ws/bi/dashboard-config`** do api-ladfood.
+- Migração (rodar **antes** no banco principal): `api-ladfood/sql/create_table_bi_dashboard_config.sql`.
+
+O front fala **apenas com o `biapi` (lad_bi)** — reusa o mesmo login/token/CORS dos demais relatórios; nenhuma segunda URL é necessária.
+
+---
+
 ## Como funciona o login
 
 - A tela de login chama `POST /auth/login` com **e-mail e senha do LADFood** e recebe um **JWT** (`access_token` + `refresh_token`).
@@ -41,6 +71,7 @@ lad-bi-dashboard/
 │   ├── vendor/             # Chart.js (local, sem CDN)
 │   └── js/
 │       ├── config.js       # << URL da API e empresa padrão (edite aqui)
+│       ├── widgets.js      # << catálogo de widgets (o que pode ligar/desligar)
 │       ├── format.js       # moeda, datas, CSV
 │       ├── api.js          # login/refresh + chamadas dos relatórios
 │       ├── charts.js       # gráficos (Chart.js)

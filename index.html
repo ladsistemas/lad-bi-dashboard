@@ -73,6 +73,7 @@
           <select id="empresa-select" aria-label="Empresa"></select>
           <small id="empresa-meta"></small>
         </div>
+        <button id="btn-config" class="icon-btn" title="Configurar painel" aria-label="Configurar painel">⚙</button>
         <button id="btn-refresh" class="icon-btn" title="Recarregar">⟳</button>
         <button id="theme-toggle" class="icon-btn" title="Tema claro/escuro">☾</button>
         <button id="btn-logout" class="btn-ghost">Sair</button>
@@ -99,7 +100,7 @@
 
     <main class="content">
       <!-- KPIs -->
-      <section class="kpi-row">
+      <section class="kpi-row" id="kpi-row">
         <div class="kpi">
           <div class="kpi-ic ic-rev">$</div>
           <div class="kpi-data">
@@ -248,6 +249,92 @@
           </div>
           <div class="card-overlay" hidden></div>
         </section>
+
+        <!-- ======= Widgets opcionais (ligados no painel de Configuração) ======= -->
+
+        <!-- DRE / Resultado -->
+        <section class="card span-6" id="card-dre" hidden>
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>DRE / Resultado do período</h3>
+              <p class="card-sub">Receitas, despesas e resultado líquido</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="mini-stats" id="dre-stats"></div>
+            <div class="chart-body"><canvas id="chart-dre"></canvas></div>
+          </div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- Contas a pagar -->
+        <section class="card span-6" id="card-contas-pagar" hidden>
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Contas a pagar</h3>
+              <p class="card-sub">Maiores fornecedores e valores em aberto</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="mini-stats" id="contas-pagar-stats"></div>
+            <div class="chart-body"><canvas id="chart-contas-pagar"></canvas></div>
+          </div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- Taxa de serviço por garçom -->
+        <section class="card span-6" id="card-taxa-servico" hidden>
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Taxa de serviço por garçom</h3>
+              <p class="card-sub">Distribuição dos 10% por funcionário</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="mini-stats" id="taxa-servico-stats"></div>
+            <div class="chart-body"><canvas id="chart-taxa-servico"></canvas></div>
+          </div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- Vendas por canal -->
+        <section class="card span-6" id="card-vendas-canal" hidden>
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Vendas por canal</h3>
+              <p class="card-sub">Salão, balcão e delivery no período</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="mini-stats" id="vendas-canal-stats"></div>
+            <div class="chart-body"><canvas id="chart-vendas-canal"></canvas></div>
+          </div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- Produtos / motivos mais cancelados (reusa o fetch de cancelamentos) -->
+        <section class="card span-6" id="card-cancel-produtos" hidden>
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Produtos e motivos mais cancelados</h3>
+              <p class="card-sub">Itens com maior valor cancelado no período</p>
+            </div>
+          </div>
+          <div class="card-body table-body">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Produto</th>
+                  <th class="num">Qtd</th>
+                  <th class="num">Valor</th>
+                  <th class="num">% do total</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-cancel-produtos"></tbody>
+            </table>
+          </div>
+          <div class="card-overlay" hidden></div>
+        </section>
       </div>
 
       <p class="note">
@@ -261,10 +348,35 @@
     </footer>
   </div>
 
+  <!-- ===================== MODAL DE CONFIGURAÇÃO ===================== -->
+  <div id="config-modal" class="modal" hidden>
+    <div class="modal-backdrop" data-config-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="config-title">
+      <div class="modal-head">
+        <div>
+          <h3 id="config-title">Configurar painel</h3>
+          <p class="modal-sub">Escolha quais indicadores aparecem e em que ordem. A configuração vale para toda a empresa.</p>
+        </div>
+        <button class="icon-btn" id="config-close" title="Fechar" aria-label="Fechar">✕</button>
+      </div>
+      <div class="modal-body">
+        <ul class="cfg-list" id="config-list"></ul>
+      </div>
+      <div class="modal-foot">
+        <span class="cfg-status" id="config-status" role="status" aria-live="polite"></span>
+        <div class="modal-actions">
+          <button class="btn-ghost" id="config-cancel">Cancelar</button>
+          <button class="btn-soft" id="config-save">Salvar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Chart.js vendorizado localmente (sem dependencia de CDN, funciona em redes que bloqueiam CDNs).
        Se o arquivo faltar, as tabelas continuam funcionando. -->
   <script src="assets/vendor/chart.umd.min.js"></script>
   <script src="assets/js/config.js"></script>
+  <script src="assets/js/widgets.js"></script>
   <script src="assets/js/format.js"></script>
   <script src="assets/js/api.js"></script>
   <script src="assets/js/charts.js"></script>

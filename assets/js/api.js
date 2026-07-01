@@ -121,6 +121,30 @@ window.LADBI = window.LADBI || {};
     });
   }
 
+  // Envio autenticado com corpo JSON (PUT/POST). Mesma renovacao proativa do authedGet.
+  function authedSend(path, method, body) {
+    if (!isLoggedIn()) return Promise.reject(new Error('Nao autenticado.'));
+    function doFetch() {
+      return fetch(cfg.apiBase + path, {
+        method: method,
+        headers: {
+          'Authorization': 'Bearer ' + session.accessToken,
+          'Content-Type': 'application/json'
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined
+      });
+    }
+    var pre = (session.expiresAt && Date.now() > session.expiresAt - 30000)
+      ? refresh() : Promise.resolve();
+    return pre.then(doFetch).then(function (res) {
+      if (res.status === 401) return refresh().then(doFetch);
+      return res;
+    }).then(function (res) {
+      if (!res.ok) return parseError(res, 'Erro ' + res.status + ' ao salvar.');
+      return res.json();
+    });
+  }
+
   // Monta query string ignorando valores nulos/indefinidos.
   function qs(params) {
     var parts = [];
@@ -158,6 +182,35 @@ window.LADBI = window.LADBI || {};
       idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim
     }));
   }
+  function dre(p) {
+    return authedGet('/api/v1/llm/financeiro/dre' + qs({
+      idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim
+    }));
+  }
+  function contasPagar(p) {
+    return authedGet('/api/v1/llm/financeiro/contas-pagar' + qs({
+      idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim
+    }));
+  }
+  function taxaServico(p) {
+    return authedGet('/api/v1/llm/financeiro/taxa-servico' + qs({
+      idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim
+    }));
+  }
+  // KDS: datas em yyyy-MM-dd (formato diferente dos /financeiro/*).
+  function vendasCanal(p) {
+    return authedGet('/api/v1/llm/kds/vendas/analise-canal' + qs({
+      idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim
+    }));
+  }
+
+  // -------- Configuracao do painel (por empresa) --------
+  function dashboardConfigGet(idEmpresa) {
+    return authedGet('/api/v1/llm/dashboard/config' + qs({ idEmpresa: idEmpresa }));
+  }
+  function dashboardConfigSave(idEmpresa, config) {
+    return authedSend('/api/v1/llm/dashboard/config' + qs({ idEmpresa: idEmpresa }), 'PUT', { config: config });
+  }
 
   LADBI.api = {
     isLoggedIn: isLoggedIn,
@@ -171,6 +224,12 @@ window.LADBI = window.LADBI || {};
     caixaRelatorio: caixaRelatorio,
     cancelamentos: cancelamentos,
     produtoVendedor: produtoVendedor,
-    contaCliente: contaCliente
+    contaCliente: contaCliente,
+    dre: dre,
+    contasPagar: contasPagar,
+    taxaServico: taxaServico,
+    vendasCanal: vendasCanal,
+    dashboardConfigGet: dashboardConfigGet,
+    dashboardConfigSave: dashboardConfigSave
   };
 })();

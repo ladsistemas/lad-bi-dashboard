@@ -1,22 +1,28 @@
 /* ==========================================================================
  * Controlador principal do painel.
- * Painel personalizado com 5 visoes:
- *  1. Quanto cada garcom vende
- *  2. Produtos mais e menos vendidos
- *  3. Garcom que mais cancela
- *  4. Qual produto cada garcom mais vende
- *  5. Ticket medio por cliente (fiado)
+ * Painel configuravel por empresa: o catalogo de widgets vive em widgets.js e
+ * a config (visibilidade + ordem) e salva por empresa (servidor + cache local).
+ * Cada "fonte de dados" (fetch) so roda se ha widget visivel que dependa dela.
  * ========================================================================== */
 (function () {
-  var api = LADBI.api, fmt = LADBI.fmt, charts = LADBI.charts, cfg = LADBI.config;
+  var api = LADBI.api, fmt = LADBI.fmt, charts = LADBI.charts, cfg = LADBI.config, W = LADBI.widgets;
 
   function el(id) { return document.getElementById(id); }
   function show(node) { if (node) node.hidden = false; }
   function hide(node) { if (node) node.hidden = true; }
+  function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
 
   // Cache dos dados renderizados (para re-render ao trocar tema, sem refetch)
   var cache = {};
-  var state = { range: null, preset: 'mes' };
+  var state = { range: null, preset: 'mes', gen: 0, config: null, visibleSet: {} };
+
+  // Cards alimentados pela fonte "caixa" (ranking consolidado).
+  var CAIXA_CARDS = [
+    { id: 'vendedores', card: 'card-vendedores' },
+    { id: 'formas', card: 'card-formas' },
+    { id: 'produtos-top', card: 'card-produtos-top' },
+    { id: 'produtos-bottom', card: 'card-produtos-bottom' }
+  ];
 
   /* ---------------------------------------------------------------- estados */
   function setState(cardId, type, msg) {
@@ -83,14 +89,77 @@
   }
 
   function syncFilterUI() {
-    // botoes
     var btns = document.querySelectorAll('[data-range]');
     btns.forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-range') === state.preset); });
-    // inputs
     el('date-inicio').value = fmt.inputDate(state.range.inicio);
     el('date-fim').value = fmt.inputDate(state.range.fim);
-    // label
     el('periodo-label').textContent = fmt.dateBR(state.range.inicio) + ' – ' + fmt.dateBR(state.range.fim);
+  }
+
+  /* --------------------------------------------------------- config (widgets) */
+  function visible(id) { return !!state.visibleSet[id]; }
+
+  function setConfig(rawCfg) {
+    var norm = W.normalize(rawCfg);
+    state.config = norm;
+    state.visibleSet = {};
+    norm.widgets.forEach(function (w) { state.visibleSet[w.id] = w.visible; });
+    applyConfigToDom();
+  }
+
+  // Mostra/oculta e ordena os cards conforme a config aplicada.
+  function applyConfigToDom() {
+    var order = 0;
+    state.config.widgets.forEach(function (w) {
+      var meta = W.get(w.id);
+      if (!meta) return;
+      var node = el(meta.cardId);
+      if (!node) return;
+      node.hidden = !w.visible;
+      // kpi-row fica fora do grid (sempre no topo); demais respeitam a ordem salva.
+      if (meta.cardId !== 'kpi-row') { node.style.order = order++; }
+    });
+  }
+
+  // Uniao das fontes exigidas pelos widgets visiveis.
+  function neededSources() {
+    var need = {};
+    W.list.forEach(function (w) {
+      if (!visible(w.id)) return;
+      (w.sources || []).forEach(function (s) { need[s] = true; });
+    });
+    return need;
+  }
+
+  // Cache local da config, por empresa (dentro de prefs).
+  function loadConfigCache(idEmpresa) {
+    var p = loadPrefs();
+    return (p.configByEmpresa && p.configByEmpresa[idEmpresa]) || null;
+  }
+  function saveConfigCache(idEmpresa, c) {
+    var p = loadPrefs();
+    p.configByEmpresa = p.configByEmpresa || {};
+    p.configByEmpresa[idEmpresa] = c;
+    savePrefs(p);
+  }
+
+  // Carrega a config da empresa (cache local imediato -> confirma no servidor) e recarrega o painel.
+  function loadConfigThenDashboard() {
+    var idEmpresa = api.getEmpresaId();
+    // Zera o cache de dados renderizados (preserva a lista de empresas) para que
+    // export CSV / re-render de tema nao usem dados da empresa anterior na janela de troca.
+    cache = { empresas: cache.empresas };
+    setConfig(loadConfigCache(idEmpresa) || W.defaultConfig());
+    api.dashboardConfigGet(idEmpresa).then(function (resp) {
+      if (resp && resp.config) {
+        saveConfigCache(idEmpresa, resp.config);
+        setConfig(resp.config);
+      }
+    }).catch(function () {
+      // servidor indisponivel: mantem cache/default (o painel continua funcionando)
+    }).finally(function () {
+      loadDashboard();
+    });
   }
 
   /* ----------------------------------------------------------- agregacao caixa */
@@ -118,8 +187,6 @@
       return Object.keys(map).map(function (k) { return map[k]; })
         .sort(function (a, b) { return (b[key] || 0) - (a[key] || 0); });
     }
-    // Recalcula o percentual de cada item sobre o total agregado (o ranking_consolidado
-    // ja vem com esse campo; no fallback precisamos derivar para nao mostrar 0,0%).
     function comPercentual(list, key) {
       var total = list.reduce(function (s, it) { return s + (Number(it[key]) || 0); }, 0);
       list.forEach(function (it) { it.percentual = total ? (Number(it[key]) || 0) / total * 100 : 0; });
@@ -129,7 +196,6 @@
     var vendedores = comPercentual(arr(vend, 'valorTotal'), 'valorTotal');
     vendedores.forEach(function (v) { v.ticketMedio = v.quantidadeVendas ? v.valorTotal / v.quantidadeVendas : 0; });
     var formas = comPercentual(arr(forma, 'valor'), 'valor');
-    // "menos vendidos" = cauda ascendente, sem repetir os que ja aparecem no top exibido
     var topNomes = {};
     produtos.slice(0, 10).forEach(function (p) { topNomes[p.produto ? p.produto.nome : ''] = true; });
     var menos = produtos.slice().reverse().filter(function (p) { return !topNomes[p.produto ? p.produto.nome : '']; });
@@ -149,11 +215,17 @@
       dataFim: fmt.apiEnd(state.range.fim)
     };
   }
+  // Datas em yyyy-MM-dd (endpoints KDS usam esse formato).
+  function currentParamsDate() {
+    return {
+      idEmpresa: api.getEmpresaId(),
+      dataInicio: fmt.inputDate(state.range.inicio),
+      dataFim: fmt.inputDate(state.range.fim)
+    };
+  }
 
-  // Token de geracao: ignora respostas de uma carga ja superada (troca rapida de periodo/empresa).
   function stale(gen) { return gen !== state.gen; }
 
-  // Sessao morta (refresh esgotado limpou o token): volta ao login em vez de travar em erro.
   function handleSessionExpired() {
     api.logout(); charts.destroyAll(); cache = {};
     showLogin('Sessão expirada. Entre novamente.');
@@ -167,16 +239,29 @@
     if (!state.range) return;
     var gen = (state.gen = (state.gen || 0) + 1);
     charts.destroyAll();
-    setKpi('kpi-faturamento', '…'); setKpi('kpi-comandas', '…');
-    setKpi('kpi-ticket', '…'); setKpi('kpi-cancelado', '…');
-    el('kpi-cancelado-sub').textContent = '';
-    ['card-vendedores', 'card-formas', 'card-produtos-top', 'card-produtos-bottom',
-      'card-cancel', 'card-produto-vendedor', 'card-conta-cliente'].forEach(function (c) { setState(c, 'loading'); });
+    // limpa os dados renderizados (preserva empresas) — evita stale no export/tema durante o load
+    cache = { empresas: cache.empresas };
 
-    loadCaixa(gen);
-    loadCancel(gen);
-    loadProdutoVendedor(gen);
-    loadContaCliente(gen);
+    if (visible('kpis')) {
+      setKpi('kpi-faturamento', '…'); setKpi('kpi-comandas', '…');
+      setKpi('kpi-ticket', '…'); setKpi('kpi-cancelado', '…');
+      el('kpi-cancelado-sub').textContent = '';
+    }
+    // marca "carregando" apenas nos cards visiveis
+    W.list.forEach(function (w) {
+      if (w.id === 'kpis') return;
+      if (visible(w.id)) setState(w.cardId, 'loading');
+    });
+
+    var need = neededSources();
+    if (need.caixa) loadCaixa(gen);
+    if (need.cancel) loadCancel(gen);
+    if (need.produtoVendedor) loadProdutoVendedor(gen);
+    if (need.contaCliente) loadContaCliente(gen);
+    if (need.dre) loadDre(gen);
+    if (need.contasPagar) loadContasPagar(gen);
+    if (need.taxaServico) loadTaxaServico(gen);
+    if (need.vendasCanal) loadVendasCanal(gen);
   }
 
   function loadCaixa(gen) {
@@ -185,16 +270,13 @@
       .then(function (data) {
         if (stale(gen)) return;
         var resumo = data.resumo_geral || {};
-        renderKpiCaixa(resumo);
+        if (visible('kpis')) renderKpiCaixa(resumo);
         var rc = data.ranking_consolidado;
         if (!rc && (resumo.totalComandas || 0) === 0) {
-          // periodo vazio
-          ['card-vendedores', 'card-formas', 'card-produtos-top', 'card-produtos-bottom']
-            .forEach(function (c) { setState(c, 'empty'); });
+          CAIXA_CARDS.forEach(function (c) { if (visible(c.id)) setState(c.card, 'empty'); });
           return;
         }
         if (!rc) {
-          // 1 unico caixa: refetch detalhado e agrega
           return api.caixaRelatorio({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim, resumido: false })
             .then(function (full) { if (stale(gen)) return; renderRanking(aggregateFromCaixas(full.caixas)); });
         }
@@ -202,9 +284,8 @@
       })
       .catch(function (e) {
         if (sessionGone() || stale(gen)) return;
-        setKpi('kpi-faturamento', '—'); setKpi('kpi-comandas', '—'); setKpi('kpi-ticket', '—');
-        ['card-vendedores', 'card-formas', 'card-produtos-top', 'card-produtos-bottom']
-          .forEach(function (c) { setState(c, 'error', e.message); });
+        if (visible('kpis')) { setKpi('kpi-faturamento', '—'); setKpi('kpi-comandas', '—'); setKpi('kpi-ticket', '—'); }
+        CAIXA_CARDS.forEach(function (c) { if (visible(c.id)) setState(c.card, 'error', e.message); });
       });
   }
 
@@ -214,16 +295,20 @@
       .then(function (data) {
         if (stale(gen)) return;
         var resumo = data.resumo || {};
-        setKpi('kpi-cancelado', fmt.money(resumo.valorCancelado));
-        el('kpi-cancelado-sub').textContent = (resumo.percentualDoFaturamento != null)
-          ? fmt.pct(resumo.percentualDoFaturamento) + ' do faturamento • ' + fmt.int(resumo.totalCancelamentos) + ' itens'
-          : fmt.int(resumo.totalCancelamentos || 0) + ' itens';
-        renderCancelVendedores(data.cancelamentosPorVendedor || []);
+        if (visible('kpis')) {
+          setKpi('kpi-cancelado', fmt.money(resumo.valorCancelado));
+          el('kpi-cancelado-sub').textContent = (resumo.percentualDoFaturamento != null)
+            ? fmt.pct(resumo.percentualDoFaturamento) + ' do faturamento • ' + fmt.int(resumo.totalCancelamentos) + ' itens'
+            : fmt.int(resumo.totalCancelamentos || 0) + ' itens';
+        }
+        if (visible('cancel')) renderCancelVendedores(data.cancelamentosPorVendedor || []);
+        if (visible('cancel-produtos')) renderCancelProdutos(data.produtosCancelados || []);
       })
       .catch(function (e) {
         if (sessionGone() || stale(gen)) return;
-        setKpi('kpi-cancelado', '—');
-        setState('card-cancel', 'error', e.message);
+        if (visible('kpis')) setKpi('kpi-cancelado', '—');
+        if (visible('cancel')) setState('card-cancel', 'error', e.message);
+        if (visible('cancel-produtos')) setState('card-cancel-produtos', 'error', e.message);
       });
   }
 
@@ -241,8 +326,44 @@
       .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-conta-cliente', 'error', e.message); });
   }
 
+  function loadDre(gen) {
+    var p = currentParams();
+    api.dre({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
+      .then(function (data) { if (stale(gen)) return; renderDre(data); })
+      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-dre', 'error', e.message); });
+  }
+
+  function loadContasPagar(gen) {
+    var p = currentParams();
+    api.contasPagar({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
+      .then(function (data) { if (stale(gen)) return; renderContasPagar(data); })
+      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-contas-pagar', 'error', e.message); });
+  }
+
+  function loadTaxaServico(gen) {
+    var p = currentParams();
+    api.taxaServico({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
+      .then(function (data) { if (stale(gen)) return; renderTaxaServico(data); })
+      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-taxa-servico', 'error', e.message); });
+  }
+
+  function loadVendasCanal(gen) {
+    var p = currentParamsDate();
+    api.vendasCanal({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
+      .then(function (data) { if (stale(gen)) return; renderVendasCanal(data); })
+      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-vendas-canal', 'error', e.message); });
+  }
+
   /* ------------------------------------------------------------- render */
   function setKpi(id, value) { var n = el(id); if (n) n.textContent = value; }
+
+  function miniStats(items) {
+    return items.map(function (it) {
+      var cls = it[2] ? (' ' + it[2]) : '';
+      return '<div class="ms"><span class="ms-label">' + escapeHtml(it[0]) + '</span>' +
+        '<span class="ms-value' + cls + '">' + it[1] + '</span></div>';
+    }).join('');
+  }
 
   function renderKpiCaixa(resumo) {
     setKpi('kpi-faturamento', fmt.money(resumo.totalFaturado));
@@ -252,10 +373,10 @@
 
   function renderRanking(rc) {
     cache.rc = rc;
-    renderVendedores(rc.vendedores_ranking || []);
-    renderProdutosTop(rc.produtos_mais_vendidos || []);
-    renderProdutosBottom(rc.produtos_menos_vendidos || []);
-    renderFormas(rc.recebimentos_por_forma || []);
+    if (visible('vendedores')) renderVendedores(rc.vendedores_ranking || []);
+    if (visible('produtos-top')) renderProdutosTop(rc.produtos_mais_vendidos || []);
+    if (visible('produtos-bottom')) renderProdutosBottom(rc.produtos_menos_vendidos || []);
+    if (visible('formas')) renderFormas(rc.recebimentos_por_forma || []);
   }
 
   function renderVendedores(list) {
@@ -316,6 +437,23 @@
     setState('card-cancel', 'ready');
   }
 
+  function renderCancelProdutos(list) {
+    cache.cancelProdutos = list;
+    var tbody = el('tbl-cancel-produtos');
+    if (!tbody) return;
+    if (!list || !list.length) { tbody.innerHTML = ''; return setState('card-cancel-produtos', 'empty', 'Nenhum cancelamento no periodo.'); }
+    var rows = list.slice().sort(function (a, b) { return num(b.valorTotal) - num(a.valorTotal); }).slice(0, 20);
+    tbody.innerHTML = rows.map(function (p) {
+      return '<tr>' +
+        '<td>' + escapeHtml((p.produto && p.produto.nome) || '—') + '</td>' +
+        '<td class="num">' + fmt.qty(p.quantidade) + '</td>' +
+        '<td class="num strong">' + fmt.money(p.valorTotal) + '</td>' +
+        '<td class="num">' + fmt.pct(num(p.percentual)) + '</td>' +
+        '</tr>';
+    }).join('');
+    setState('card-cancel-produtos', 'ready');
+  }
+
   function renderProdutoVendedor(vendedores) {
     cache.produtoVendedor = vendedores;
     var tbody = el('tbl-produto-vendedor');
@@ -360,9 +498,187 @@
     setState('card-conta-cliente', 'ready');
   }
 
+  function renderDre(data) {
+    cache.dre = data;
+    var r = (data && data.resumo) || {};
+    var receita = (r.receitaLiquida != null ? r.receitaLiquida : r.receitaBruta);
+    var hasData = r.receitaBruta != null || r.receitaLiquida != null || r.totalDespesas != null;
+    el('dre-stats').innerHTML = miniStats([
+      ['Receita líquida', fmt.money(receita)],
+      ['Despesas', fmt.money(r.totalDespesas)],
+      ['Resultado', fmt.money(r.resultadoLiquido), (num(r.resultadoLiquido) >= 0 ? 'pos' : 'neg')],
+      ['Margem', fmt.pct(r.margemLiquida != null ? r.margemLiquida : r.margemOperacional)]
+    ]);
+    if (!charts.ready()) return setState('card-dre', 'error', 'Biblioteca de graficos indisponivel.');
+    if (!hasData) { charts.destroy('chart-dre'); return setState('card-dre', 'empty'); }
+    charts.horizontalBar('chart-dre',
+      ['Receita líquida', 'Despesas', 'Resultado'],
+      [num(receita), num(r.totalDespesas), num(r.resultadoLiquido)],
+      { multicolor: true, valueFmt: 'money' });
+    setState('card-dre', 'ready');
+  }
+
+  function renderContasPagar(data) {
+    cache.contasPagar = data;
+    var r = (data && data.resumo) || {};
+    el('contas-pagar-stats').innerHTML = miniStats([
+      ['Em aberto', fmt.money(r.totalAberto)],
+      ['Pago', fmt.money(r.totalPago)],
+      ['Total', fmt.money(r.valorTotal)],
+      ['Parcelas vencidas', fmt.int(r.parcelasVencidas)]
+    ]);
+    var forn = (data && data.porFornecedor) || [];
+    if (!charts.ready()) return setState('card-contas-pagar', 'error', 'Biblioteca de graficos indisponivel.');
+    if (!forn.length) {
+      charts.destroy('chart-contas-pagar');
+      if (!r.valorTotal && !r.totalAberto) return setState('card-contas-pagar', 'empty', 'Sem contas a pagar no periodo.');
+      return setState('card-contas-pagar', 'ready');
+    }
+    var top = forn.slice().sort(function (a, b) { return num(b.valorAberto) - num(a.valorAberto); }).slice(0, 10);
+    charts.horizontalBar('chart-contas-pagar',
+      top.map(function (f) { return fmt.truncate(f.nomeFantasia || '—', 22); }),
+      top.map(function (f) { return num(f.valorAberto); }),
+      { color: '#f59e0b', valueFmt: 'money', extra: top.map(function (f) { return fmt.money(f.valorTotal) + ' total'; }) });
+    setState('card-contas-pagar', 'ready');
+  }
+
+  function renderTaxaServico(data) {
+    cache.taxaServico = data;
+    var r = (data && data.resumo) || {};
+    el('taxa-servico-stats').innerHTML = miniStats([
+      ['Total taxa', fmt.money(r.total_taxa_servico)],
+      ['Ticket médio', fmt.money(r.ticket_medio_taxa)],
+      ['% médio', fmt.pct(r.percentual_medio)]
+    ]);
+    var func = (data && data.por_funcionario) || [];
+    if (!charts.ready()) return setState('card-taxa-servico', 'error', 'Biblioteca de graficos indisponivel.');
+    if (!func.length) { charts.destroy('chart-taxa-servico'); return setState('card-taxa-servico', 'empty', 'Sem taxa de servico no periodo.'); }
+    var top = func.slice(0, 15);
+    charts.horizontalBar('chart-taxa-servico',
+      top.map(function (f) { return fmt.truncate((f.funcionario && f.funcionario.nome) || '—', 22); }),
+      top.map(function (f) { return num(f.total_taxa_servico); }),
+      { color: '#1a1fa0', valueFmt: 'money', extra: top.map(function (f) { return fmt.pct(num(f.percentual_do_total)); }) });
+    setState('card-taxa-servico', 'ready');
+  }
+
+  function renderVendasCanal(data) {
+    cache.vendasCanal = data;
+    var tg = (data && data.totaisGerais) || {};
+    el('vendas-canal-stats').innerHTML = miniStats([
+      ['Faturamento', fmt.money(tg.valor)],
+      ['Pedidos', fmt.int(tg.quantidade)],
+      ['Ticket médio', fmt.money(tg.ticketMedio)]
+    ]);
+    var g = (data && data.graficosFaturamentoPorCanal) || [];
+    if (!charts.ready()) return setState('card-vendas-canal', 'error', 'Biblioteca de graficos indisponivel.');
+    if (!g.length) { charts.destroy('chart-vendas-canal'); return setState('card-vendas-canal', 'empty', 'Sem vendas por canal no periodo.'); }
+    charts.doughnut('chart-vendas-canal',
+      g.map(function (c) { return c.canal || '—'; }),
+      g.map(function (c) { return num(c.valor); }));
+    setState('card-vendas-canal', 'ready');
+  }
+
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+
+  // Re-render (sem refetch) do que estiver em cache e visivel — usado ao trocar tema.
+  function rerenderAll() {
+    if (cache.rc) renderRanking(cache.rc);
+    if (cache.cancel && visible('cancel')) renderCancelVendedores(cache.cancel);
+    if (cache.cancelProdutos && visible('cancel-produtos')) renderCancelProdutos(cache.cancelProdutos);
+    if (cache.produtoVendedor && visible('produto-vendedor')) renderProdutoVendedor(cache.produtoVendedor);
+    if (cache.dre && visible('dre')) renderDre(cache.dre);
+    if (cache.contasPagar && visible('contas-pagar')) renderContasPagar(cache.contasPagar);
+    if (cache.taxaServico && visible('taxa-servico')) renderTaxaServico(cache.taxaServico);
+    if (cache.vendasCanal && visible('vendas-canal')) renderVendasCanal(cache.vendasCanal);
+  }
+
+  /* ------------------------------------------------------------- painel de config */
+  function openConfig() {
+    if (!state.config) setConfig(W.defaultConfig());
+    buildConfigList(state.config);
+    el('config-status').textContent = '';
+    el('config-save').disabled = false;
+    el('config-modal').hidden = false;
+  }
+  function closeConfig() { el('config-modal').hidden = true; }
+
+  function buildConfigList(c) {
+    var ul = el('config-list');
+    ul.innerHTML = '';
+    c.widgets.forEach(function (w) {
+      var meta = W.get(w.id);
+      if (!meta) return;
+      var li = document.createElement('li');
+      li.className = 'cfg-row';
+      li.setAttribute('data-id', w.id);
+      li.innerHTML =
+        '<span class="cfg-move">' +
+          '<button type="button" class="cfg-up" title="Subir" aria-label="Subir">▲</button>' +
+          '<button type="button" class="cfg-down" title="Descer" aria-label="Descer">▼</button>' +
+        '</span>' +
+        '<label class="switch"><input type="checkbox"' + (w.visible ? ' checked' : '') +
+          ' aria-label="' + escapeHtml(meta.titulo) + '" /><span class="slider"></span></label>' +
+        '<span class="cfg-title">' + escapeHtml(meta.titulo) + '</span>' +
+        '<span class="cfg-cat">' + escapeHtml(meta.categoria) + '</span>';
+      ul.appendChild(li);
+    });
+    refreshMoveButtons();
+  }
+
+  function refreshMoveButtons() {
+    var rows = el('config-list').querySelectorAll('.cfg-row');
+    rows.forEach(function (r, i) {
+      var up = r.querySelector('.cfg-up'), dn = r.querySelector('.cfg-down');
+      if (up) up.disabled = (i === 0);
+      if (dn) dn.disabled = (i === rows.length - 1);
+    });
+  }
+
+  function onConfigListClick(ev) {
+    var t = ev.target;
+    var btn = t && t.closest ? t.closest('.cfg-up, .cfg-down') : null;
+    if (!btn) return;
+    var row = btn.closest('.cfg-row');
+    if (!row) return;
+    if (btn.classList.contains('cfg-up') && row.previousElementSibling) {
+      row.parentNode.insertBefore(row, row.previousElementSibling);
+    } else if (btn.classList.contains('cfg-down') && row.nextElementSibling) {
+      row.parentNode.insertBefore(row.nextElementSibling, row);
+    }
+    refreshMoveButtons();
+  }
+
+  function readConfigFromList() {
+    var rows = el('config-list').querySelectorAll('.cfg-row');
+    var widgets = [];
+    rows.forEach(function (r) {
+      var cb = r.querySelector('input[type=checkbox]');
+      widgets.push({ id: r.getAttribute('data-id'), visible: !!(cb && cb.checked) });
+    });
+    return { version: 1, widgets: widgets };
+  }
+
+  function saveConfig() {
+    var c = readConfigFromList();
+    var idEmpresa = api.getEmpresaId();
+    var btn = el('config-save');
+    btn.disabled = true;
+    el('config-status').textContent = 'Salvando…';
+    // aplica local + cache imediatamente (UX responsiva); servidor e best-effort
+    saveConfigCache(idEmpresa, c);
+    setConfig(c);
+    loadDashboard();
+    api.dashboardConfigSave(idEmpresa, c).then(function () {
+      el('config-status').textContent = 'Salvo ✓';
+      setTimeout(closeConfig, 500);
+    }).catch(function (e) {
+      el('config-status').textContent = 'Salvo neste navegador. Servidor: ' + (e.message || 'falhou');
+    }).finally(function () {
+      btn.disabled = false;
     });
   }
 
@@ -409,9 +725,7 @@
     p.theme = (document.body.classList.contains('dark')) ? 'light' : 'dark';
     savePrefs(p);
     applyTheme(p.theme);
-    // re-render graficos com as novas cores (sem refetch)
-    if (cache.rc) renderRanking(cache.rc);
-    if (cache.cancel) renderCancelVendedores(cache.cancel);
+    rerenderAll();
   }
 
   /* ------------------------------------------------------------- empresa */
@@ -424,7 +738,6 @@
       o.textContent = (e.fantasia || ('Empresa ' + e.idEmpresa));
       sel.appendChild(o);
     });
-    // escolher empresa: sessao salva > padrao(924) > primeira
     var saved = api.getEmpresaId();
     var ids = lista.map(function (e) { return e.idEmpresa; });
     var chosen = (saved && ids.indexOf(saved) >= 0) ? saved
@@ -442,7 +755,7 @@
     var id = Number(sel.value);
     var lista = cache.empresas || [];
     var emp = lista.filter(function (e) { return e.idEmpresa === id; })[0];
-    if (emp) { api.setEmpresa(emp); updateEmpresaMeta(emp); loadDashboard(); }
+    if (emp) { api.setEmpresa(emp); updateEmpresaMeta(emp); loadConfigThenDashboard(); }
   }
 
   /* ------------------------------------------------------------- views */
@@ -465,8 +778,11 @@
       cache.empresas = lista;
       populateEmpresas(lista);
       el('brand-empresa').textContent = (api.getSession().empresa.fantasia || '');
-      // periodo inicial: mes atual
-      applyPreset('mes');
+      // periodo inicial: mes atual (sem carregar ainda; a config decide as fontes)
+      state.preset = 'mes';
+      state.range = computeRange('mes');
+      syncFilterUI();
+      loadConfigThenDashboard();
     }).catch(function (e) {
       api.logout();
       showLogin(e.status === 401 ? 'Sessao expirada. Entre novamente.' : ('Falha ao carregar empresas: ' + e.message));
@@ -495,6 +811,7 @@
     api.logout();
     charts.destroyAll();
     cache = {};
+    closeConfig();
     showLogin();
   }
 
@@ -507,13 +824,23 @@
     el('empresa-select').addEventListener('change', onEmpresaChange);
     el('btn-aplicar').addEventListener('click', applyCustom);
 
+    // painel de configuracao
+    el('btn-config').addEventListener('click', openConfig);
+    el('config-close').addEventListener('click', closeConfig);
+    el('config-cancel').addEventListener('click', closeConfig);
+    el('config-save').addEventListener('click', saveConfig);
+    el('config-list').addEventListener('click', onConfigListClick);
+    document.querySelectorAll('[data-config-close]').forEach(function (b) { b.addEventListener('click', closeConfig); });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && !el('config-modal').hidden) closeConfig();
+    });
+
     document.querySelectorAll('[data-range]').forEach(function (b) {
       b.addEventListener('click', function () { applyPreset(b.getAttribute('data-range')); });
     });
     document.querySelectorAll('[data-export]').forEach(function (b) {
       b.addEventListener('click', function () { exportCSV(b.getAttribute('data-export')); });
     });
-    // retry dentro dos overlays
     document.addEventListener('click', function (ev) {
       if (ev.target && ev.target.getAttribute && ev.target.getAttribute('data-retry')) loadDashboard();
     });
