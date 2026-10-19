@@ -295,7 +295,7 @@
       .then(function (data) {
         if (stale(gen)) return;
         var resumo = data.resumo || {};
-        cache.cancel = { valor: num(resumo.valorCancelado), itens: resumo.totalCancelamentos || 0 };
+        cache.cancelKpi = { valor: num(resumo.valorCancelado), itens: resumo.totalCancelamentos || 0 };
         if (visible('kpis')) {
           setKpi('kpi-cancelado', fmt.money(resumo.valorCancelado));
           renderCancelSub();
@@ -376,7 +376,7 @@
   // dividido pela soma das comandas canceladas, nao pelo faturamento. Calcula aqui com o totalFaturado
   // do caixa; enquanto o caixa nao chegou, mostra so a contagem de itens.
   function renderCancelSub() {
-    var c = cache.cancel;
+    var c = cache.cancelKpi;
     if (!c || !visible('kpis')) return;
     var itens = fmt.int(c.itens) + ' itens';
     var fat = num(cache.totalFaturado);
