@@ -295,11 +295,10 @@
       .then(function (data) {
         if (stale(gen)) return;
         var resumo = data.resumo || {};
+        cache.cancel = { valor: num(resumo.valorCancelado), itens: resumo.totalCancelamentos || 0 };
         if (visible('kpis')) {
           setKpi('kpi-cancelado', fmt.money(resumo.valorCancelado));
-          el('kpi-cancelado-sub').textContent = (resumo.percentualDoFaturamento != null)
-            ? fmt.pct(resumo.percentualDoFaturamento) + ' do faturamento • ' + fmt.int(resumo.totalCancelamentos) + ' itens'
-            : fmt.int(resumo.totalCancelamentos || 0) + ' itens';
+          renderCancelSub();
         }
         if (visible('cancel')) renderCancelVendedores(data.cancelamentosPorVendedor || []);
         if (visible('cancel-produtos')) renderCancelProdutos(data.produtosCancelados || []);
@@ -369,6 +368,21 @@
     setKpi('kpi-faturamento', fmt.money(resumo.totalFaturado));
     setKpi('kpi-comandas', fmt.int(resumo.totalComandas));
     setKpi('kpi-ticket', fmt.money(resumo.ticketMedio));
+    cache.totalFaturado = num(resumo.totalFaturado);
+    renderCancelSub();
+  }
+
+  // % do cancelado sobre o faturamento do periodo (#130568): a API devolvia percentualDoFaturamento
+  // dividido pela soma das comandas canceladas, nao pelo faturamento. Calcula aqui com o totalFaturado
+  // do caixa; enquanto o caixa nao chegou, mostra so a contagem de itens.
+  function renderCancelSub() {
+    var c = cache.cancel;
+    if (!c || !visible('kpis')) return;
+    var itens = fmt.int(c.itens) + ' itens';
+    var fat = num(cache.totalFaturado);
+    el('kpi-cancelado-sub').textContent = fat > 0
+      ? fmt.pct(c.valor / fat * 100) + ' do faturamento • ' + itens
+      : itens;
   }
 
   function renderRanking(rc) {
