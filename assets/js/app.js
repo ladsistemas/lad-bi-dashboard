@@ -14,6 +14,8 @@
 
   // Cache dos dados renderizados (para re-render ao trocar tema, sem refetch)
   var cache = {};
+  // Sazonalidade nao depende do periodo do filtro: fica fora do cache limpo a cada carga.
+  var sazCache = {};
   var state = { range: null, preset: 'mes', gen: 0, config: null, visibleSet: {} };
 
   // Cards alimentados pela fonte "caixa" (ranking consolidado).
@@ -262,6 +264,8 @@
     if (need.contasPagar) loadContasPagar(gen);
     if (need.taxaServico) loadTaxaServico(gen);
     if (need.vendasCanal) loadVendasCanal(gen);
+    if (need.tempoEntrega) loadTempoEntrega(gen);
+    if (need.sazonalidade) loadSazonalidade(gen);
   }
 
   function loadCaixa(gen) {
@@ -351,6 +355,26 @@
     api.vendasCanal({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
       .then(function (data) { if (stale(gen)) return; renderVendasCanal(data); })
       .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-vendas-canal', 'error', e.message); });
+  }
+
+  function loadTempoEntrega(gen) {
+    var p = currentParams();
+    api.tempoEntrega({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
+      .then(function (data) { if (stale(gen)) return; renderTempoEntrega(data); })
+      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-tempo-entrega', 'error', e.message); });
+  }
+
+  // Sempre os ultimos 90 dias (nao segue o filtro de periodo): so refaz ao trocar de empresa.
+  function loadSazonalidade(gen) {
+    var idEmpresa = api.getEmpresaId();
+    if (sazCache.data && sazCache.idEmpresa === idEmpresa) { renderSazonalidade(sazCache.data); return; }
+    api.sazonalidadeProdutos({ idEmpresa: idEmpresa, limite: 40 })
+      .then(function (data) {
+        if (stale(gen)) return;
+        sazCache = { idEmpresa: idEmpresa, data: data };
+        renderSazonalidade(data);
+      })
+      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-sazonalidade', 'error', e.message); });
   }
 
   /* ------------------------------------------------------------- render */
@@ -592,6 +616,111 @@
     setState('card-vendas-canal', 'ready');
   }
 
+  /* ------------------------------------------- tempo de entrega (delivery) */
+  function min(v) { return v == null ? '—' : fmt.int(v) + ' min'; }
+  function med(bloco, chave) { return bloco && bloco[chave] ? bloco[chave].medianaMin : null; }
+  function p90(bloco, chave) { return bloco && bloco[chave] ? bloco[chave].p90Min : null; }
+
+  function renderTempoEntrega(data) {
+    cache.tempoEntrega = data;
+    var r = data && data.resumo;
+    if (!r) return setState('card-tempo-entrega', 'empty', 'Sem pedidos de delivery no periodo.');
+    el('tempo-entrega-stats').innerHTML = miniStats([
+      ['Pedidos', fmt.int(r.pedidos)],
+      ['Preparo', min(med(r, 'preparo'))],
+      ['Espera p/ sair', min(med(r, 'esperaDespacho'))],
+      ['Rota', min(med(r, 'rota'))],
+      ['Total', min(med(r, 'total'))],
+      ['Prazo seguro', min(p90(r, 'total'))],
+      ['Prazo seg–qui', min(p90(data.segundaAQuinta, 'total'))],
+      ['Prazo sex–dom', min(p90(data.sextaADomingo, 'total')), 'neg']
+    ]);
+    el('tbl-tempo-dia').innerHTML = (data.porDiaSemana || []).map(function (d) {
+      return '<tr><td class="strong">' + escapeHtml(d.diaSemana) + '</td>' +
+        '<td class="num">' + fmt.int(d.pedidos) + '</td>' +
+        '<td class="num">' + min(med(d, 'preparo')) + '</td>' +
+        '<td class="num">' + min(med(d, 'esperaDespacho')) + '</td>' +
+        '<td class="num">' + min(med(d, 'rota')) + '</td>' +
+        '<td class="num strong">' + min(med(d, 'total')) + '</td>' +
+        '<td class="num">' + min(p90(d, 'total')) + '</td></tr>';
+    }).join('');
+
+    var faixas = data.porDistancia || [];
+    var porRaio = faixas.length > 0;
+    var linhas = porRaio ? faixas : (data.porBairro || []);
+    el('tempo-raio-head').innerHTML = '<tr><th>' + (porRaio ? 'Raio' : 'Bairro') + '</th><th class="num">Pedidos</th>' +
+      '<th class="num">Rota</th><th class="num">Total</th>' +
+      (porRaio ? '<th class="num">Prazo seg–qui</th><th class="num">Prazo sex–dom</th>' : '<th class="num">Prazo seguro</th>') + '</tr>';
+    el('tbl-tempo-raio').innerHTML = linhas.map(function (f) {
+      return '<tr><td class="strong">' + escapeHtml(porRaio ? f.faixaKm : f.bairro) + '</td>' +
+        '<td class="num">' + fmt.int(f.pedidos) + '</td>' +
+        '<td class="num">' + min(med(f, 'rota')) + '</td>' +
+        '<td class="num strong">' + min(med(f, 'total')) + '</td>' +
+        (porRaio
+          ? '<td class="num">' + min(p90(f.segundaAQuinta, 'total')) + '</td><td class="num">' + min(p90(f.sextaADomingo, 'total')) + '</td>'
+          : '<td class="num">' + min(p90(f, 'total')) + '</td>') + '</tr>';
+    }).join('');
+    var comRota = r.rota ? num(r.rota.pedidos) : 0;
+    el('tempo-entrega-nota').textContent =
+      (porRaio ? 'Raio em linha reta da loja ao cliente (o trajeto real é maior). '
+        : 'Sem latitude/longitude da loja no cadastro da empresa: mostrando os bairros com mais pedidos no lugar do raio. ') +
+      'Rota e total consideram os ' + fmt.int(comRota) + ' pedidos com horário de saída e de entrega registrados' +
+      (num(r.pedidosComHorarioDoParceiro) ? ' (' + fmt.int(r.pedidosComHorarioDoParceiro) + ' com o horário do entregador parceiro).' : '.');
+    setState('card-tempo-entrega', 'ready');
+  }
+
+  /* ---------------------------------------- programacao da producao (90 d) */
+  var SAZ_DIAS = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'];
+
+  function sazGrupos(data) { return (data && (data.produtos || data.categorias)) || []; }
+
+  // Grade selecionada no combo: '' = pedidos (todos os produtos); senao o indice do produto.
+  function sazSelecionado(data) {
+    var v = el('saz-select').value;
+    var g = v === '' ? null : sazGrupos(data)[Number(v)];
+    return g ? { nome: g.produto || g.categoria, grade: g.grade, unidade: 'un' }
+      : { nome: 'Pedidos', grade: (data.pedidos && data.pedidos.grade) || [], unidade: 'pedidos' };
+  }
+
+  function renderSazonalidade(data) {
+    cache.sazonalidade = data;
+    if (!data || !num(data.diasComVenda)) return setState('card-sazonalidade', 'empty', 'Sem vendas nos ultimos 90 dias.');
+    var sel = el('saz-select');
+    var atual = sel.value;
+    sel.innerHTML = '<option value="">Pedidos (todos os produtos)</option>' + sazGrupos(data).map(function (g, i) {
+      return '<option value="' + i + '">' + escapeHtml(fmt.truncate(g.produto || g.categoria || '—', 42)) + '</option>';
+    }).join('');
+    if (atual && sel.querySelector('option[value="' + atual + '"]')) sel.value = atual;
+    renderSazonalidadeGrade();
+    setState('card-sazonalidade', 'ready');
+  }
+
+  function renderSazonalidadeGrade() {
+    var data = cache.sazonalidade;
+    if (!data) return;
+    var s = sazSelecionado(data);
+    var amostra = data.diasNaAmostra || [];
+    // cor relativa ao menor e ao maior valor da grade: destaca os picos mesmo com valores proximos
+    var vals = [];
+    s.grade.forEach(function (l) { SAZ_DIAS.forEach(function (d) { if (l[d] != null) vals.push(num(l[d])); }); });
+    var lo = Math.min.apply(null, vals.concat(Infinity)), hi = Math.max.apply(null, vals.concat(0));
+    el('tbl-sazonalidade').innerHTML = s.grade.map(function (l, i) {
+      var dias = amostra[i] || {};
+      if (!num(dias.dias)) return '';
+      return '<tr><td class="strong">' + l.semanaDoMes + 'ª semana <span class="faint">(dias ' + escapeHtml(l.diasDoMes) + ')</span></td>' +
+        SAZ_DIAS.map(function (d) {
+          if (l[d] == null) return '<td class="num faint">—</td>';
+          return '<td class="num heat" style="--heat:' + (hi > lo ? ((num(l[d]) - lo) / (hi - lo)).toFixed(2) : 0) + '" title="média de ' +
+            num(dias[d]) + ' dia(s)">' + fmt.qty(l[d]) + '</td>';
+        }).join('') +
+        '<td class="num strong">' + fmt.qty(l.mediaPorDia) + '</td></tr>';
+    }).join('');
+    el('saz-nota').textContent = s.nome + ': média de ' + s.unidade + ' por dia, todos os canais somados. ' +
+      '1ª semana = dias 1 a 7 do mês (a 1ª segunda, a 1ª terça...). Cada célula é a média de até ' +
+      Math.max.apply(null, amostra.map(function (a) { return Math.max.apply(null, SAZ_DIAS.map(function (d) { return num(a[d]); })); }).concat(0)) +
+      ' dias (passe o mouse para ver quantos).';
+  }
+
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
@@ -721,6 +850,29 @@
       fmt.downloadCSV('ticket_medio_cliente' + per + '.csv',
         ['Cliente', 'Ticket medio', 'Nº contas', 'Valor total', 'Saldo em aberto'],
         cache.contaCliente.map(function (c) { return [c.nomeCliente || '', c.ticketMedio || 0, c.totalContas || 0, c.valorTotal || 0, c.saldoAberto || 0]; }));
+    } else if (which === 'tempo-entrega' && cache.tempoEntrega) {
+      var te = cache.tempoEntrega;
+      var linhasTempo = (te.porDiaSemana || []).map(function (d) { return ['Dia', d.diaSemana, d]; })
+        .concat((te.porDistancia || []).map(function (f) { return ['Raio', f.faixaKm, f]; }))
+        .concat((te.porBairro || []).map(function (b) { return ['Bairro', b.bairro, b]; }));
+      fmt.downloadCSV('tempo_entrega' + per + '.csv',
+        ['Corte', 'Faixa', 'Pedidos', 'Preparo (mediana)', 'Espera (mediana)', 'Rota (mediana)', 'Total (mediana)', 'Prazo seguro (p90)'],
+        linhasTempo.map(function (l) {
+          var b = l[2];
+          return [l[0], l[1], b.pedidos || 0, med(b, 'preparo'), med(b, 'esperaDespacho'), med(b, 'rota'), med(b, 'total'), p90(b, 'total')];
+        }));
+    } else if (which === 'sazonalidade' && cache.sazonalidade) {
+      var sz = cache.sazonalidade;
+      var blocos = [{ nome: 'Pedidos (todos os produtos)', grade: (sz.pedidos && sz.pedidos.grade) || [] }]
+        .concat(sazGrupos(sz).map(function (g) { return { nome: g.produto || g.categoria, grade: g.grade || [] }; }));
+      var linhasSaz = [];
+      blocos.forEach(function (b) {
+        b.grade.forEach(function (l) {
+          linhasSaz.push([b.nome, l.semanaDoMes, l.diasDoMes].concat(SAZ_DIAS.map(function (d) { return l[d]; })).concat([l.mediaPorDia]));
+        });
+      });
+      fmt.downloadCSV('producao_semana_do_mes_x_dia (90 dias).csv',
+        ['Produto', 'Semana do mes', 'Dias do mes', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom', 'Media por dia'], linhasSaz);
     }
   }
 
@@ -825,6 +977,7 @@
     api.logout();
     charts.destroyAll();
     cache = {};
+    sazCache = {};
     closeConfig();
     showLogin();
   }
@@ -837,6 +990,7 @@
     el('theme-toggle').addEventListener('click', toggleTheme);
     el('empresa-select').addEventListener('change', onEmpresaChange);
     el('btn-aplicar').addEventListener('click', applyCustom);
+    el('saz-select').addEventListener('change', renderSazonalidadeGrade);
 
     // painel de configuracao
     el('btn-config').addEventListener('click', openConfig);

@@ -204,6 +204,18 @@ window.LADBI = window.LADBI || {};
     }));
   }
 
+  function tempoEntrega(p) {
+    return authedGet('/api/v1/llm/kds/tempo-entrega' + qs({
+      idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim
+    }));
+  }
+  // Sem datas: o servidor usa os ultimos 90 dias completos.
+  function sazonalidadeProdutos(p) {
+    return authedGet('/api/v1/llm/vendas/sazonalidade-produtos' + qs({
+      idEmpresa: p.idEmpresa, agrupar: p.agrupar, limite: p.limite
+    }));
+  }
+
   // -------- Configuracao do painel (por empresa) --------
   function dashboardConfigGet(idEmpresa) {
     return authedGet('/api/v1/llm/dashboard/config' + qs({ idEmpresa: idEmpresa }));
@@ -229,6 +241,8 @@ window.LADBI = window.LADBI || {};
     contasPagar: contasPagar,
     taxaServico: taxaServico,
     vendasCanal: vendasCanal,
+    tempoEntrega: tempoEntrega,
+    sazonalidadeProdutos: sazonalidadeProdutos,
     dashboardConfigGet: dashboardConfigGet,
     dashboardConfigSave: dashboardConfigSave
   };
