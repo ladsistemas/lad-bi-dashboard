@@ -35,6 +35,8 @@ O botão **⚙ (Configurar painel)** no topo abre um painel onde o usuário **li
 | Taxa de serviço por garçom | `GET /api/v1/llm/financeiro/taxa-servico` |
 | Vendas por canal (salão/balcão/delivery) | `GET /api/v1/llm/kds/vendas/analise-canal` |
 | Produtos e motivos mais cancelados | reusa `GET /api/v1/llm/cancelamentos` |
+| Tempo de preparo e entrega (delivery): por dia da semana e por raio em km (ou bairro) | `GET /api/v1/llm/kds/tempo-entrega` |
+| Programação da produção: média por semana do mês × dia da semana (sempre os últimos 90 dias) | `GET /api/v1/llm/vendas/sazonalidade-produtos` |
 
 ### Onde a config é guardada (backend)
 

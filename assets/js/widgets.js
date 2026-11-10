@@ -25,7 +25,9 @@ window.LADBI = window.LADBI || {};
     { id: 'dre',              titulo: 'DRE / Resultado do período',        categoria: 'Financeiro',     cardId: 'card-dre',           sources: ['dre'],             defaultVisible: false },
     { id: 'contas-pagar',     titulo: 'Contas a pagar (vencimentos)',      categoria: 'Financeiro',     cardId: 'card-contas-pagar',  sources: ['contasPagar'],     defaultVisible: false },
     { id: 'taxa-servico',     titulo: 'Taxa de serviço por garçom',        categoria: 'Financeiro',     cardId: 'card-taxa-servico',  sources: ['taxaServico'],     defaultVisible: false },
-    { id: 'vendas-canal',     titulo: 'Vendas por canal',                  categoria: 'Operação',       cardId: 'card-vendas-canal',  sources: ['vendasCanal'],     defaultVisible: false }
+    { id: 'vendas-canal',     titulo: 'Vendas por canal',                  categoria: 'Operação',       cardId: 'card-vendas-canal',  sources: ['vendasCanal'],     defaultVisible: false },
+    { id: 'tempo-entrega',    titulo: 'Tempo de preparo e entrega (delivery)', categoria: 'Operação',   cardId: 'card-tempo-entrega', sources: ['tempoEntrega'],    defaultVisible: false },
+    { id: 'sazonalidade',     titulo: 'Programação da produção (semana do mês × dia)', categoria: 'Operação', cardId: 'card-sazonalidade', sources: ['sazonalidade'], defaultVisible: false }
   ];
 
   var byId = {};
