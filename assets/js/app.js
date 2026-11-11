@@ -3,9 +3,18 @@
  * Painel configuravel por empresa: o catalogo de widgets vive em widgets.js e
  * a config (visibilidade + ordem) e salva por empresa (servidor + cache local).
  * Cada "fonte de dados" (fetch) so roda se ha widget visivel que dependa dela.
+ *
+ * Multiloja: com 2+ lojas marcadas cada fonte e buscada em cada loja e
+ * consolidada por merge.js; os renders recebem o mesmo formato de sempre.
+ * A config do painel e a da 1a loja selecionada.
  * ========================================================================== */
 (function () {
   var api = LADBI.api, fmt = LADBI.fmt, charts = LADBI.charts, cfg = LADBI.config, W = LADBI.widgets;
+  var merge = LADBI.merge, exporter = LADBI.exporter;
+
+  // ponytail: cada loja marcada multiplica as chamadas (ate ~10 por loja). Acima disso o caminho
+  // e consolidar no servidor (endpoint com idsEmpresas), nao aumentar o teto.
+  var MAX_LOJAS = 12;
 
   function el(id) { return document.getElementById(id); }
   function show(node) { if (node) node.hidden = false; }
@@ -16,7 +25,7 @@
   var cache = {};
   // Sazonalidade nao depende do periodo do filtro: fica fora do cache limpo a cada carga.
   var sazCache = {};
-  var state = { range: null, preset: 'mes', gen: 0, config: null, visibleSet: {} };
+  var state = { range: null, preset: 'mes', gen: 0, config: null, visibleSet: {}, empresas: [], produtoPor: 'nome' };
 
   // Cards alimentados pela fonte "caixa" (ranking consolidado).
   var CAIXA_CARDS = [
@@ -43,9 +52,9 @@
     if (type === 'loading') {
       ov.innerHTML = '<div class="spinner"></div><span>Carregando…</span>';
     } else if (type === 'empty') {
-      ov.innerHTML = '<div class="state-ic">◍</div><span>' + (msg || 'Sem dados neste periodo.') + '</span>';
+      ov.innerHTML = '<div class="state-ic">◍</div><span>' + escapeHtml(msg || 'Sem dados neste periodo.') + '</span>';
     } else {
-      ov.innerHTML = '<div class="state-ic err">!</div><span>' + (msg || 'Erro ao carregar.') + '</span>' +
+      ov.innerHTML = '<div class="state-ic err">!</div><span>' + escapeHtml(msg || 'Erro ao carregar.') + '</span>' +
         '<button class="btn-ghost sm" data-retry="1">Tentar de novo</button>';
     }
   }
@@ -211,19 +220,38 @@
 
   /* ------------------------------------------------------------- loaders */
   function currentParams() {
-    return {
-      idEmpresa: api.getEmpresaId(),
-      dataInicio: fmt.apiStart(state.range.inicio),
-      dataFim: fmt.apiEnd(state.range.fim)
-    };
+    return { dataInicio: fmt.apiStart(state.range.inicio), dataFim: fmt.apiEnd(state.range.fim) };
   }
   // Datas em yyyy-MM-dd (endpoints KDS usam esse formato).
   function currentParamsDate() {
-    return {
-      idEmpresa: api.getEmpresaId(),
-      dataInicio: fmt.inputDate(state.range.inicio),
-      dataFim: fmt.inputDate(state.range.fim)
-    };
+    return { dataInicio: fmt.inputDate(state.range.inicio), dataFim: fmt.inputDate(state.range.fim) };
+  }
+
+  function multi() { return state.empresas.length > 1; }
+  function nomeLoja(e) { return e.fantasia || ('Empresa ' + e.idEmpresa); }
+
+  // Busca a fonte em cada loja selecionada: [{ empresa, data }]. Com varias lojas o erro diz qual falhou.
+  function porLoja(fetchFn) {
+    var varias = multi();
+    return Promise.all(state.empresas.map(function (e) {
+      return fetchFn(e.idEmpresa).then(function (data) { return { empresa: e, data: data }; }, function (err) {
+        if (varias && err && err.status !== 401) err.message = nomeLoja(e) + ': ' + err.message;
+        throw err;
+      });
+    }));
+  }
+  // 1 loja: a resposta da API como veio. 2+: consolidada (merge.js).
+  function consolidar(fonte, parts) {
+    return parts.length === 1 ? parts[0].data : merge[fonte](parts, { produtoPor: state.produtoPor });
+  }
+  // Loader padrao: busca por loja, consolida e entrega ao render; erro vai para o(s) card(s).
+  function carregar(gen, fonte, fetchFn, render, cards) {
+    porLoja(fetchFn)
+      .then(function (parts) { if (!stale(gen)) render(consolidar(fonte, parts)); })
+      .catch(function (e) {
+        if (sessionGone() || stale(gen)) return;
+        cards.forEach(function (c) { if (visible(c.id)) setState(c.card, 'error', e.message); });
+      });
   }
 
   function stale(gen) { return gen !== state.gen; }
@@ -238,7 +266,7 @@
   }
 
   function loadDashboard() {
-    if (!state.range) return;
+    if (!state.range || !state.empresas.length) return;
     var gen = (state.gen = (state.gen || 0) + 1);
     charts.destroyAll();
     // limpa os dados renderizados (preserva empresas) — evita stale no export/tema durante o load
@@ -268,23 +296,35 @@
     if (need.sazonalidade) loadSazonalidade(gen);
   }
 
+  // Caixa de UMA loja -> { resumo, rc }. Periodo com 1 unico caixa nao traz ranking_consolidado:
+  // monta a partir do detalhe do caixa.
+  function caixaDaLoja(p, limiteRanking) {
+    return function (idEmpresa) {
+      var q = { idEmpresa: idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim, resumido: true, limiteRanking: limiteRanking };
+      return api.caixaRelatorio(q).then(function (data) {
+        var resumo = data.resumo_geral || {}, rc = data.ranking_consolidado;
+        if (rc || !num(resumo.totalComandas)) return { resumo: resumo, rc: rc || null };
+        q.resumido = false;
+        return api.caixaRelatorio(q).then(function (full) { return { resumo: resumo, rc: aggregateFromCaixas(full.caixas) }; });
+      });
+    };
+  }
+
   function loadCaixa(gen) {
-    var p = currentParams();
-    api.caixaRelatorio({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim, resumido: true })
-      .then(function (data) {
+    // multiloja: pede a lista inteira de produtos de cada loja; somando so o top 20 de cada uma,
+    // o produto que ficou em 21o numa delas sumiria da conta
+    porLoja(caixaDaLoja(currentParams(), multi() ? 2000 : undefined))
+      .then(function (parts) {
         if (stale(gen)) return;
-        var resumo = data.resumo_geral || {};
-        if (visible('kpis')) renderKpiCaixa(resumo);
-        var rc = data.ranking_consolidado;
-        if (!rc && (resumo.totalComandas || 0) === 0) {
-          CAIXA_CARDS.forEach(function (c) { if (visible(c.id)) setState(c.card, 'empty'); });
+        var c = parts.length === 1
+          ? { resumo_geral: parts[0].data.resumo, ranking_consolidado: parts[0].data.rc }
+          : merge.caixa(parts, { produtoPor: state.produtoPor });
+        if (visible('kpis')) renderKpiCaixa(c.resumo_geral);
+        if (parts.every(function (p) { return !p.data.rc; })) {
+          CAIXA_CARDS.forEach(function (card) { if (visible(card.id)) setState(card.card, 'empty'); });
           return;
         }
-        if (!rc) {
-          return api.caixaRelatorio({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim, resumido: false })
-            .then(function (full) { if (stale(gen)) return; renderRanking(aggregateFromCaixas(full.caixas)); });
-        }
-        renderRanking(rc);
+        renderRanking(c.ranking_consolidado);
       })
       .catch(function (e) {
         if (sessionGone() || stale(gen)) return;
@@ -295,9 +335,10 @@
 
   function loadCancel(gen) {
     var p = currentParams();
-    api.cancelamentos({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim, resumido: true })
-      .then(function (data) {
+    porLoja(function (id) { return api.cancelamentos({ idEmpresa: id, dataInicio: p.dataInicio, dataFim: p.dataFim, resumido: true }); })
+      .then(function (parts) {
         if (stale(gen)) return;
+        var data = consolidar('cancel', parts);
         var resumo = data.resumo || {};
         cache.cancelKpi = { valor: num(resumo.valorCancelado), itens: resumo.totalCancelamentos || 0 };
         if (visible('kpis')) {
@@ -317,64 +358,75 @@
 
   function loadProdutoVendedor(gen) {
     var p = currentParams();
-    api.produtoVendedor({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
-      .then(function (data) { if (stale(gen)) return; renderProdutoVendedor(data.vendedores || []); })
-      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-produto-vendedor', 'error', e.message); });
+    carregar(gen, 'produtoVendedor',
+      function (id) { return api.produtoVendedor({ idEmpresa: id, dataInicio: p.dataInicio, dataFim: p.dataFim }); },
+      function (data) { renderProdutoVendedor(data.vendedores || []); },
+      [{ id: 'produto-vendedor', card: 'card-produto-vendedor' }]);
   }
 
   function loadContaCliente(gen) {
     var p = currentParams();
-    api.contaCliente({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
-      .then(function (data) { if (stale(gen)) return; renderContaCliente((data.saldosPorCliente) || []); })
-      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-conta-cliente', 'error', e.message); });
+    carregar(gen, 'contaCliente',
+      function (id) { return api.contaCliente({ idEmpresa: id, dataInicio: p.dataInicio, dataFim: p.dataFim }); },
+      function (data) { renderContaCliente(data.saldosPorCliente || []); },
+      [{ id: 'conta-cliente', card: 'card-conta-cliente' }]);
   }
 
   function loadDre(gen) {
     var p = currentParams();
-    api.dre({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
-      .then(function (data) { if (stale(gen)) return; renderDre(data); })
-      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-dre', 'error', e.message); });
+    carregar(gen, 'dre',
+      function (id) { return api.dre({ idEmpresa: id, dataInicio: p.dataInicio, dataFim: p.dataFim }); },
+      renderDre, [{ id: 'dre', card: 'card-dre' }]);
   }
 
   function loadContasPagar(gen) {
     var p = currentParams();
-    api.contasPagar({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
-      .then(function (data) { if (stale(gen)) return; renderContasPagar(data); })
-      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-contas-pagar', 'error', e.message); });
+    carregar(gen, 'contasPagar',
+      function (id) { return api.contasPagar({ idEmpresa: id, dataInicio: p.dataInicio, dataFim: p.dataFim }); },
+      renderContasPagar, [{ id: 'contas-pagar', card: 'card-contas-pagar' }]);
   }
 
   function loadTaxaServico(gen) {
     var p = currentParams();
-    api.taxaServico({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
-      .then(function (data) { if (stale(gen)) return; renderTaxaServico(data); })
-      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-taxa-servico', 'error', e.message); });
+    carregar(gen, 'taxaServico',
+      function (id) { return api.taxaServico({ idEmpresa: id, dataInicio: p.dataInicio, dataFim: p.dataFim }); },
+      renderTaxaServico, [{ id: 'taxa-servico', card: 'card-taxa-servico' }]);
   }
 
   function loadVendasCanal(gen) {
     var p = currentParamsDate();
-    api.vendasCanal({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
-      .then(function (data) { if (stale(gen)) return; renderVendasCanal(data); })
-      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-vendas-canal', 'error', e.message); });
+    carregar(gen, 'vendasCanal',
+      function (id) { return api.vendasCanal({ idEmpresa: id, dataInicio: p.dataInicio, dataFim: p.dataFim }); },
+      renderVendasCanal, [{ id: 'vendas-canal', card: 'card-vendas-canal' }]);
   }
 
+  // Mediana e p90 nao se somam entre lojas: o render recebe as partes e compara loja a loja.
   function loadTempoEntrega(gen) {
     var p = currentParams();
-    api.tempoEntrega({ idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim })
-      .then(function (data) { if (stale(gen)) return; renderTempoEntrega(data); })
+    porLoja(function (id) { return api.tempoEntrega({ idEmpresa: id, dataInicio: p.dataInicio, dataFim: p.dataFim }); })
+      .then(function (parts) { if (!stale(gen)) renderTempoEntrega(parts); })
       .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-tempo-entrega', 'error', e.message); });
   }
 
-  // Sempre os ultimos 90 dias (nao segue o filtro de periodo): so refaz ao trocar de empresa.
+  // Sempre os ultimos 90 dias (nao segue o filtro de periodo): so refaz ao trocar as lojas
+  // ou quando o card por turno e ligado (porTurno pesa mais no servidor, so vai se precisa).
   function loadSazonalidade(gen) {
-    var idEmpresa = api.getEmpresaId();
-    if (sazCache.data && sazCache.idEmpresa === idEmpresa) { renderSazonalidade(sazCache.data); return; }
-    api.sazonalidadeProdutos({ idEmpresa: idEmpresa, limite: 40 })
-      .then(function (data) {
+    var comTurno = visible('sazonalidade-turno') || visible('producao-7dias');
+    var ids = state.empresas.map(function (e) { return e.idEmpresa; }).join(',');
+    if (sazCache.parts && sazCache.ids === ids && (sazCache.comTurno || !comTurno)) { renderSazonalidade(sazCache.parts); return; }
+    // multiloja: lista maior por loja, para o produto fora do top de uma delas nao ficar sem a parte dela
+    porLoja(function (id) { return api.sazonalidadeProdutos({ idEmpresa: id, limite: multi() ? 200 : 40, porTurno: comTurno || undefined }); })
+      .then(function (parts) {
+        sazCache = { ids: ids, comTurno: comTurno, parts: parts };
         if (stale(gen)) return;
-        sazCache = { idEmpresa: idEmpresa, data: data };
-        renderSazonalidade(data);
+        renderSazonalidade(parts);
       })
-      .catch(function (e) { if (sessionGone() || stale(gen)) return; setState('card-sazonalidade', 'error', e.message); });
+      .catch(function (e) {
+        if (sessionGone() || stale(gen)) return;
+        if (visible('sazonalidade')) setState('card-sazonalidade', 'error', e.message);
+        if (visible('sazonalidade-turno')) setState('card-sazonalidade-turno', 'error', e.message);
+        if (visible('producao-7dias')) setState('card-producao-7dias', 'error', e.message);
+      });
   }
 
   /* ------------------------------------------------------------- render */
@@ -621,8 +673,21 @@
   function med(bloco, chave) { return bloco && bloco[chave] ? bloco[chave].medianaMin : null; }
   function p90(bloco, chave) { return bloco && bloco[chave] ? bloco[chave].p90Min : null; }
 
-  function renderTempoEntrega(data) {
-    cache.tempoEntrega = data;
+  // Linha "rotulo | pedidos | preparo | espera | rota | total | prazo seguro" (dia da semana ou loja).
+  function tempoLinha(rotulo, b) {
+    return '<tr><td class="strong">' + escapeHtml(rotulo) + '</td>' +
+      '<td class="num">' + fmt.int(b.pedidos) + '</td>' +
+      '<td class="num">' + min(med(b, 'preparo')) + '</td>' +
+      '<td class="num">' + min(med(b, 'esperaDespacho')) + '</td>' +
+      '<td class="num">' + min(med(b, 'rota')) + '</td>' +
+      '<td class="num strong">' + min(med(b, 'total')) + '</td>' +
+      '<td class="num">' + min(p90(b, 'total')) + '</td></tr>';
+  }
+
+  function renderTempoEntrega(parts) {
+    cache.tempoEntrega = parts;
+    if (parts.length > 1) return renderTempoEntregaLojas(parts);
+    var data = parts[0].data;
     var r = data && data.resumo;
     if (!r) return setState('card-tempo-entrega', 'empty', 'Sem pedidos de delivery no periodo.');
     el('tempo-entrega-stats').innerHTML = miniStats([
@@ -635,15 +700,8 @@
       ['Prazo seg–qui', min(p90(data.segundaAQuinta, 'total'))],
       ['Prazo sex–dom', min(p90(data.sextaADomingo, 'total')), 'neg']
     ]);
-    el('tbl-tempo-dia').innerHTML = (data.porDiaSemana || []).map(function (d) {
-      return '<tr><td class="strong">' + escapeHtml(d.diaSemana) + '</td>' +
-        '<td class="num">' + fmt.int(d.pedidos) + '</td>' +
-        '<td class="num">' + min(med(d, 'preparo')) + '</td>' +
-        '<td class="num">' + min(med(d, 'esperaDespacho')) + '</td>' +
-        '<td class="num">' + min(med(d, 'rota')) + '</td>' +
-        '<td class="num strong">' + min(med(d, 'total')) + '</td>' +
-        '<td class="num">' + min(p90(d, 'total')) + '</td></tr>';
-    }).join('');
+    el('tempo-dia-col').textContent = 'Dia';
+    el('tbl-tempo-dia').innerHTML = (data.porDiaSemana || []).map(function (d) { return tempoLinha(d.diaSemana, d); }).join('');
 
     var faixas = data.porDistancia || [];
     var porRaio = faixas.length > 0;
@@ -669,42 +727,60 @@
     setState('card-tempo-entrega', 'ready');
   }
 
+  // Multiloja: uma linha por loja (comparativo), no lugar de dia da semana e raio.
+  function renderTempoEntregaLojas(parts) {
+    var lojas = parts.filter(function (p) { return p.data && p.data.resumo; });
+    if (!lojas.length) return setState('card-tempo-entrega', 'empty', 'Sem pedidos de delivery no periodo.');
+    el('tempo-entrega-stats').innerHTML = miniStats([
+      ['Pedidos', fmt.int(lojas.reduce(function (s, p) { return s + num(p.data.resumo.pedidos); }, 0))],
+      ['Lojas com delivery', fmt.int(lojas.length)]
+    ]);
+    el('tempo-dia-col').textContent = 'Loja';
+    el('tbl-tempo-dia').innerHTML = lojas.map(function (p) { return tempoLinha(nomeLoja(p.empresa), p.data.resumo); }).join('');
+    el('tempo-raio-head').innerHTML = '<tr><th>Loja</th><th class="num">Prazo seguro</th>' +
+      '<th class="num">Prazo seg–qui</th><th class="num">Prazo sex–dom</th></tr>';
+    el('tbl-tempo-raio').innerHTML = lojas.map(function (p) {
+      return '<tr><td class="strong">' + escapeHtml(nomeLoja(p.empresa)) + '</td>' +
+        '<td class="num strong">' + min(p90(p.data.resumo, 'total')) + '</td>' +
+        '<td class="num">' + min(p90(p.data.segundaAQuinta, 'total')) + '</td>' +
+        '<td class="num">' + min(p90(p.data.sextaADomingo, 'total')) + '</td></tr>';
+    }).join('');
+    el('tempo-entrega-nota').textContent = 'Tempo normal (mediana) e prazo seguro não se somam entre lojas: cada linha é uma loja. ' +
+      'Para ver por dia da semana e por raio, selecione uma loja só.';
+    setState('card-tempo-entrega', 'ready');
+  }
+
   /* ---------------------------------------- programacao da producao (90 d) */
   var SAZ_DIAS = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'];
+  var SAZ_HEAD = '<tr><th>Semana do mês</th><th class="num">Seg</th><th class="num">Ter</th><th class="num">Qua</th>' +
+    '<th class="num">Qui</th><th class="num">Sex</th><th class="num">Sáb</th><th class="num">Dom</th><th class="num">Média/dia</th></tr>';
 
   function sazGrupos(data) { return (data && (data.produtos || data.categorias)) || []; }
+  function sazNome(g) { return g.produto || g.categoria || '—'; }
 
-  // Grade selecionada no combo: '' = pedidos (todos os produtos); senao o indice do produto.
-  function sazSelecionado(data) {
-    var v = el('saz-select').value;
-    var g = v === '' ? null : sazGrupos(data)[Number(v)];
-    return g ? { nome: g.produto || g.categoria, grade: g.grade, unidade: 'un' }
-      : { nome: 'Pedidos', grade: (data.pedidos && data.pedidos.grade) || [], unidade: 'pedidos' };
-  }
-
-  function renderSazonalidade(data) {
-    cache.sazonalidade = data;
-    if (!data || !num(data.diasComVenda)) return setState('card-sazonalidade', 'empty', 'Sem vendas nos ultimos 90 dias.');
-    var sel = el('saz-select');
+  function sazPreencher(selId, data) {
+    var sel = el(selId);
     var atual = sel.value;
     sel.innerHTML = '<option value="">Pedidos (todos os produtos)</option>' + sazGrupos(data).map(function (g, i) {
-      return '<option value="' + i + '">' + escapeHtml(fmt.truncate(g.produto || g.categoria || '—', 42)) + '</option>';
+      return '<option value="' + i + '">' + escapeHtml(fmt.truncate(sazNome(g), 42)) + '</option>';
     }).join('');
     if (atual && sel.querySelector('option[value="' + atual + '"]')) sel.value = atual;
-    renderSazonalidadeGrade();
-    setState('card-sazonalidade', 'ready');
   }
 
-  function renderSazonalidadeGrade() {
-    var data = cache.sazonalidade;
-    if (!data) return;
-    var s = sazSelecionado(data);
-    var amostra = data.diasNaAmostra || [];
-    // cor relativa ao menor e ao maior valor da grade: destaca os picos mesmo com valores proximos
+  // Bloco escolhido no combo: '' = pedidos (todos os produtos); senao o indice do produto.
+  function sazSelecionado(selId, data) {
+    var v = el(selId).value;
+    var g = v === '' ? null : sazGrupos(data)[Number(v)];
+    return g ? { nome: sazNome(g), bloco: g, unidade: 'un' } : { nome: 'Pedidos', bloco: data.pedidos || {}, unidade: 'pedidos' };
+  }
+
+  // Linhas do mapa de calor. Cor relativa ao menor e ao maior valor da propria grade:
+  // destaca os picos mesmo com valores proximos.
+  function sazLinhas(grade, amostra) {
     var vals = [];
-    s.grade.forEach(function (l) { SAZ_DIAS.forEach(function (d) { if (l[d] != null) vals.push(num(l[d])); }); });
+    grade.forEach(function (l) { SAZ_DIAS.forEach(function (d) { if (l[d] != null) vals.push(num(l[d])); }); });
     var lo = Math.min.apply(null, vals.concat(Infinity)), hi = Math.max.apply(null, vals.concat(0));
-    el('tbl-sazonalidade').innerHTML = s.grade.map(function (l, i) {
+    return grade.map(function (l, i) {
       var dias = amostra[i] || {};
       if (!num(dias.dias)) return '';
       return '<tr><td class="strong">' + l.semanaDoMes + 'ª semana <span class="faint">(dias ' + escapeHtml(l.diasDoMes) + ')</span></td>' +
@@ -715,10 +791,132 @@
         }).join('') +
         '<td class="num strong">' + fmt.qty(l.mediaPorDia) + '</td></tr>';
     }).join('');
-    el('saz-nota').textContent = s.nome + ': média de ' + s.unidade + ' por dia, todos os canais somados. ' +
+  }
+  function sazMaxDias(amostra) {
+    return Math.max.apply(null, (amostra || []).map(function (a) {
+      return Math.max.apply(null, SAZ_DIAS.map(function (d) { return num(a[d]); }));
+    }).concat(0));
+  }
+  function sazNotaLojas() { return multi() ? 'Lojas somadas: cada célula é a soma da média de cada loja. ' : ''; }
+
+  // parts = resposta de cada loja; consolida aqui para a troca nome/codigo nao exigir nova busca.
+  function renderSazonalidade(parts) {
+    var data = consolidar('sazonalidade', parts);
+    if (parts.length > 1) ['produtos', 'categorias'].forEach(function (k) { if (data[k]) data[k] = data[k].slice(0, 40); });
+    cache.sazonalidade = data;
+    var vazio = !data || !num(data.diasComVenda);
+    if (visible('sazonalidade')) {
+      if (vazio) setState('card-sazonalidade', 'empty', 'Sem vendas nos ultimos 90 dias.');
+      else { sazPreencher('saz-select', data); renderSazonalidadeGrade(); setState('card-sazonalidade', 'ready'); }
+    }
+    if (visible('sazonalidade-turno')) {
+      if (vazio) setState('card-sazonalidade-turno', 'empty', 'Sem vendas nos ultimos 90 dias.');
+      else if (!(data.turnos && data.turnos.length)) {
+        setState('card-sazonalidade-turno', 'empty', 'A API ainda não separa por turno: disponível após a próxima atualização do LAD BI.');
+      } else { sazPreencher('saz-turno-select', data); renderSazonalidadeTurnos(); setState('card-sazonalidade-turno', 'ready'); }
+    }
+    if (visible('producao-7dias')) {
+      if (vazio) setState('card-producao-7dias', 'empty', 'Sem vendas nos ultimos 90 dias.');
+      else { prod7PreencherTurnos(data); renderProducao7(); setState('card-producao-7dias', 'ready'); }
+    }
+  }
+
+  function renderSazonalidadeGrade() {
+    var data = cache.sazonalidade;
+    if (!data) return;
+    var s = sazSelecionado('saz-select', data);
+    var amostra = data.diasNaAmostra || [];
+    el('tbl-sazonalidade').innerHTML = sazLinhas(s.bloco.grade || [], amostra);
+    el('saz-nota').textContent = s.nome + ': média de ' + s.unidade + ' por dia, todos os canais somados. ' + sazNotaLojas() +
       '1ª semana = dias 1 a 7 do mês (a 1ª segunda, a 1ª terça...). Cada célula é a média de até ' +
-      Math.max.apply(null, amostra.map(function (a) { return Math.max.apply(null, SAZ_DIAS.map(function (d) { return num(a[d]); })); }).concat(0)) +
+      sazMaxDias(amostra) + ' dias (passe o mouse para ver quantos).';
+  }
+
+  // Uma grade por turno (os mesmos turnos do dashboard KDS), para o produto escolhido.
+  function renderSazonalidadeTurnos() {
+    var data = cache.sazonalidade;
+    if (!data || !data.turnos) return;
+    var s = sazSelecionado('saz-turno-select', data);
+    var porChave = {};
+    (s.bloco.porTurno || []).forEach(function (t) { porChave[t.chave] = t; });
+    el('saz-turno-tabelas').innerHTML = data.turnos.map(function (t) {
+      var b = porChave[t.chave] || {};
+      return '<div class="table-body"><h4 class="turno-title">' + escapeHtml(t.label) +
+        ' <span class="faint">· ' + (b.mediaPorDia == null ? 'sem venda' : 'média de ' + fmt.qty(b.mediaPorDia) + ' ' + s.unidade + ' por dia') + '</span></h4>' +
+        '<table class="data-table heat-table"><thead>' + SAZ_HEAD + '</thead><tbody>' +
+        sazLinhas(b.grade || [], t.diasNaAmostra || []) + '</tbody></table></div>';
+    }).join('');
+    el('saz-turno-nota').textContent = s.nome + ': média de ' + s.unidade + ' por dia em cada turno, todos os canais somados. ' + sazNotaLojas() +
+      'A venda depois da meia-noite conta no dia em que o turno começou. A cor compara os dias dentro do mesmo turno. ' +
+      'Cada célula é a média de até ' + Math.max.apply(null, data.turnos.map(function (t) { return sazMaxDias(t.diasNaAmostra); }).concat(0)) +
       ' dias (passe o mouse para ver quantos).';
+  }
+
+  /* ------------------------------------------- producao dos proximos 7 dias */
+  var PROD7_FOLGA = 0.15, PROD7_ITENS = 10;
+  var PROD7_DIAS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+  // Os 7 dias a partir de amanha, cada um com a celula da grade (semana do mes x dia) que o representa.
+  function prod7Dias() {
+    var hoje = new Date(), out = [];
+    for (var i = 1; i <= 7; i++) {
+      var d = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + i);
+      out.push({
+        rotulo: PROD7_DIAS[d.getDay()] + ' ' + ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2),
+        semana: Math.floor((d.getDate() - 1) / 7),
+        dia: SAZ_DIAS[(d.getDay() + 6) % 7]
+      });
+    }
+    return out;
+  }
+  // media + folga, para cima (o epsilon evita 69,0000001 virar 70)
+  function prod7Sugestao(media) { return Math.ceil(media * (1 + PROD7_FOLGA) - 1e-9) || 0; }
+
+  function prod7PreencherTurnos(data) {
+    var sel = el('prod7-turno'), atual = sel.value, turnos = data.turnos || [];
+    sel.innerHTML = '<option value="">Dia inteiro</option>' + turnos.map(function (t) {
+      return '<option value="' + escapeHtml(t.chave) + '">' + escapeHtml(t.label) + '</option>';
+    }).join('');
+    sel.hidden = !turnos.length;
+    if (turnos.some(function (t) { return t.chave === atual; })) sel.value = atual;
+  }
+
+  // Linhas da tabela: pedidos (so a media) + os itens mais vendidos; celulas = media de cada dia ou null.
+  function prod7Modelo(data) {
+    var chave = el('prod7-turno').value, dias = prod7Dias();
+    function celulas(b) {
+      if (chave) b = (b.porTurno || []).filter(function (t) { return t.chave === chave; })[0] || {};
+      return dias.map(function (d) { var l = (b.grade || [])[d.semana]; return l && l[d.dia] != null ? num(l[d.dia]) : null; });
+    }
+    return {
+      dias: dias,
+      linhas: [{ nome: 'Pedidos esperados (todos)', pedidos: true, celulas: celulas(data.pedidos || {}) }]
+        .concat(sazGrupos(data).slice(0, PROD7_ITENS).map(function (g) {
+          return { nome: sazNome(g), categoria: g.produto ? g.categoria : '', celulas: celulas(g) };
+        }))
+    };
+  }
+
+  function renderProducao7() {
+    var data = cache.sazonalidade;
+    if (!data) return;
+    var m = prod7Modelo(data);
+    el('prod7-head').innerHTML = '<tr><th>Item</th>' + m.dias.map(function (d) {
+      return '<th class="num">' + d.rotulo + '<br><span class="faint">' + (d.semana + 1) + 'ª semana</span></th>';
+    }).join('') + '</tr>';
+    el('tbl-prod7').innerHTML = m.linhas.map(function (l) {
+      return '<tr' + (l.pedidos ? ' class="prod7-total"' : '') + '><td class="strong">' + escapeHtml(l.nome) +
+        (l.categoria ? ' <span class="faint">' + escapeHtml(l.categoria) + '</span>' : '') + '</td>' +
+        l.celulas.map(function (v) {
+          if (v == null) return '<td class="num faint">sem histórico</td>';
+          if (l.pedidos) return '<td class="num strong">' + fmt.qty(v) + '</td>';
+          return '<td class="num"><span class="faint">média ' + fmt.qty(v) + '</span>' +
+            '<strong class="prod7-n">' + fmt.int(prod7Sugestao(v)) + '</strong></td>';
+        }).join('') + '</tr>';
+    }).join('');
+    el('prod7-nota').textContent = 'Em cada casa: a média do histórico e, em destaque, quanto produzir (média + ' +
+      Math.round(PROD7_FOLGA * 100) + '%). ' + sazNotaLojas() +
+      'É uma sugestão: cada média vem de poucos dias parecidos; "sem histórico" = não houve venda num dia assim nos últimos 90 dias.';
   }
 
   function escapeHtml(s) {
@@ -743,6 +941,8 @@
   function openConfig() {
     if (!state.config) setConfig(W.defaultConfig());
     buildConfigList(state.config);
+    el('config-sub').textContent = 'Escolha quais indicadores aparecem e em que ordem. A configuração vale para toda a empresa.' +
+      (multi() ? ' Com várias lojas marcadas, vale (e é salva) a de ' + nomeLoja(state.empresas[0]) + '.' : '');
     el('config-status').textContent = '';
     el('config-save').disabled = false;
     el('config-modal').hidden = false;
@@ -825,55 +1025,186 @@
     });
   }
 
-  /* ------------------------------------------------------------- exports CSV */
-  function exportCSV(which) {
-    var per = ' (' + fmt.inputDate(state.range.inicio) + '_a_' + fmt.inputDate(state.range.fim) + ')';
-    if (which === 'vendedores' && cache.vendedores) {
-      fmt.downloadCSV('garcons_vendas' + per + '.csv',
-        ['Garcom', 'Vendas', 'Valor total', '% do total', 'Ticket medio'],
-        cache.vendedores.map(function (v) {
-          return [v.vendedor ? v.vendedor.nome : '', v.quantidadeVendas || 0, v.valorTotal || 0, v.percentual || 0, v.ticketMedio || 0];
-        }));
-    } else if (which === 'cancel' && cache.cancel) {
-      fmt.downloadCSV('garcons_cancelamentos' + per + '.csv',
-        ['Garcom', 'Itens cancelados', 'Quantidade', 'Valor cancelado', '% do total'],
-        cache.cancel.map(function (v) { return [v.vendedor || '', v.totalCancelamentos || 0, v.quantidade || 0, v.valorTotal || 0, v.percentual || 0]; }));
-    } else if (which === 'produto-vendedor' && cache.produtoVendedor) {
-      fmt.downloadCSV('produto_por_garcom' + per + '.csv',
-        ['Garcom', 'Produto mais vendido', 'Qtd', 'Valor do produto', 'Total do garcom'],
-        cache.produtoVendedor.map(function (v) {
+  /* ------------------------------------------------- exportar (Excel, PDF, CSV) */
+  function col(h, t) { return { h: h, t: t || 'text' }; }
+  function colsProduto() {
+    return [col('Produto'), col('Código'), col('Categoria'), col('Qtd', 'qty'), col('Valor', 'money'), col('% do faturamento', 'pct')];
+  }
+  function linhasProduto(lista) {
+    return lista.map(function (p) {
+      var pr = p.produto || {};
+      return [pr.nome || '', pr.codigo == null ? '' : String(pr.codigo), pr.categoria || '', num(p.quantidade), num(p.valorTotal), num(p.percentual)];
+    });
+  }
+  var SAZ_COLS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'].map(function (d) { return col(d, 'qty'); }).concat([col('Média por dia', 'qty')]);
+  function sazLinhaExport(l) { return SAZ_DIAS.map(function (d) { return l[d]; }).concat([l.mediaPorDia]); }
+  function sazBlocos(sz) {
+    return [{ nome: 'Pedidos (todos os produtos)', bloco: sz.pedidos || {} }]
+      .concat(sazGrupos(sz).map(function (g) { return { nome: sazNome(g), bloco: g }; }));
+  }
+
+  // Dados de cada card em valores crus: { arquivo, titulo, colunas, linhas, semPeriodo? }.
+  function exportDef(which) {
+    switch (which) {
+      case 'vendedores': return cache.vendedores && {
+        arquivo: 'garcons_vendas', titulo: 'Quanto cada garçom vende',
+        colunas: [col('Garçom'), col('Vendas', 'int'), col('Valor total', 'money'), col('% do total', 'pct'), col('Ticket médio', 'money')],
+        linhas: cache.vendedores.map(function (v) {
+          return [v.vendedor ? v.vendedor.nome : '', num(v.quantidadeVendas), num(v.valorTotal), num(v.percentual), num(v.ticketMedio)];
+        })
+      };
+      case 'formas': return cache.formas && {
+        arquivo: 'formas_pagamento', titulo: 'Formas de pagamento',
+        colunas: [col('Forma'), col('Qtd', 'int'), col('Valor', 'money'), col('% do faturamento', 'pct')],
+        linhas: cache.formas.map(function (f) { return [f.forma ? f.forma.nome : '', num(f.quantidade), num(f.valor), num(f.percentual)]; })
+      };
+      case 'produtos-top': return cache.produtosTop && {
+        arquivo: 'produtos_mais_vendidos', titulo: 'Produtos mais vendidos', colunas: colsProduto(), linhas: linhasProduto(cache.produtosTop)
+      };
+      case 'produtos-bottom': return cache.produtosBottom && {
+        arquivo: 'produtos_menos_vendidos', titulo: 'Produtos menos vendidos', colunas: colsProduto(), linhas: linhasProduto(cache.produtosBottom)
+      };
+      case 'cancel': return cache.cancel && {
+        arquivo: 'garcons_cancelamentos', titulo: 'Garçom que mais cancela',
+        colunas: [col('Garçom'), col('Itens cancelados', 'int'), col('Quantidade', 'qty'), col('Valor cancelado', 'money'), col('% do total', 'pct')],
+        linhas: cache.cancel.map(function (v) { return [v.vendedor || '', num(v.totalCancelamentos), num(v.quantidade), num(v.valorTotal), num(v.percentual)]; })
+      };
+      case 'cancel-produtos': return cache.cancelProdutos && {
+        arquivo: 'produtos_cancelados', titulo: 'Produtos e motivos mais cancelados',
+        colunas: [col('Produto'), col('Qtd', 'qty'), col('Valor', 'money'), col('% do total', 'pct')],
+        linhas: cache.cancelProdutos.slice().sort(function (a, b) { return num(b.valorTotal) - num(a.valorTotal); }).map(function (p) {
+          return [(p.produto && p.produto.nome) || '', num(p.quantidade), num(p.valorTotal), num(p.percentual)];
+        })
+      };
+      case 'produto-vendedor': return cache.produtoVendedor && {
+        arquivo: 'produto_por_garcom', titulo: 'O produto que cada garçom mais vende',
+        colunas: [col('Garçom'), col('Produto mais vendido'), col('Qtd', 'qty'), col('Valor do produto', 'money'), col('Total do garçom', 'money')],
+        linhas: cache.produtoVendedor.map(function (v) {
           var prods = (v.produtos || []).slice().sort(function (a, b) { return (b.valorTotal || 0) - (a.valorTotal || 0); });
           var t = prods[0] || {};
-          return [v.vendedorNome || '', t.produtoNome || '', t.quantidadeTotal || 0, t.valorTotal || 0, v.valorTotal || 0];
-        }));
-    } else if (which === 'conta-cliente' && cache.contaCliente) {
-      fmt.downloadCSV('ticket_medio_cliente' + per + '.csv',
-        ['Cliente', 'Ticket medio', 'Nº contas', 'Valor total', 'Saldo em aberto'],
-        cache.contaCliente.map(function (c) { return [c.nomeCliente || '', c.ticketMedio || 0, c.totalContas || 0, c.valorTotal || 0, c.saldoAberto || 0]; }));
-    } else if (which === 'tempo-entrega' && cache.tempoEntrega) {
-      var te = cache.tempoEntrega;
-      var linhasTempo = (te.porDiaSemana || []).map(function (d) { return ['Dia', d.diaSemana, d]; })
-        .concat((te.porDistancia || []).map(function (f) { return ['Raio', f.faixaKm, f]; }))
-        .concat((te.porBairro || []).map(function (b) { return ['Bairro', b.bairro, b]; }));
-      fmt.downloadCSV('tempo_entrega' + per + '.csv',
-        ['Corte', 'Faixa', 'Pedidos', 'Preparo (mediana)', 'Espera (mediana)', 'Rota (mediana)', 'Total (mediana)', 'Prazo seguro (p90)'],
-        linhasTempo.map(function (l) {
-          var b = l[2];
-          return [l[0], l[1], b.pedidos || 0, med(b, 'preparo'), med(b, 'esperaDespacho'), med(b, 'rota'), med(b, 'total'), p90(b, 'total')];
-        }));
-    } else if (which === 'sazonalidade' && cache.sazonalidade) {
-      var sz = cache.sazonalidade;
-      var blocos = [{ nome: 'Pedidos (todos os produtos)', grade: (sz.pedidos && sz.pedidos.grade) || [] }]
-        .concat(sazGrupos(sz).map(function (g) { return { nome: g.produto || g.categoria, grade: g.grade || [] }; }));
-      var linhasSaz = [];
-      blocos.forEach(function (b) {
-        b.grade.forEach(function (l) {
-          linhasSaz.push([b.nome, l.semanaDoMes, l.diasDoMes].concat(SAZ_DIAS.map(function (d) { return l[d]; })).concat([l.mediaPorDia]));
+          return [v.vendedorNome || '', t.produtoNome || '', num(t.quantidadeTotal), num(t.valorTotal), num(v.valorTotal)];
+        })
+      };
+      case 'conta-cliente': return cache.contaCliente && {
+        arquivo: 'ticket_medio_cliente', titulo: 'Ticket médio por cliente',
+        colunas: [col('Cliente'), col('Ticket médio', 'money'), col('Nº contas', 'int'), col('Valor total', 'money'), col('Saldo em aberto', 'money')],
+        linhas: cache.contaCliente.map(function (c) { return [c.nomeCliente || '', num(c.ticketMedio), num(c.totalContas), num(c.valorTotal), num(c.saldoAberto)]; })
+      };
+      case 'dre': {
+        var dr = cache.dre && cache.dre.resumo;
+        return dr && {
+          arquivo: 'dre', titulo: 'DRE / Resultado do período',
+          colunas: [col('Receita bruta', 'money'), col('Receita líquida', 'money'), col('Despesas', 'money'),
+            col('Resultado líquido', 'money'), col('Margem', 'pct')],
+          linhas: [[dr.receitaBruta, dr.receitaLiquida, dr.totalDespesas, dr.resultadoLiquido,
+            dr.margemLiquida != null ? dr.margemLiquida : dr.margemOperacional]]
+        };
+      }
+      case 'contas-pagar': return cache.contasPagar && {
+        arquivo: 'contas_a_pagar', titulo: 'Contas a pagar por fornecedor',
+        colunas: [col('Fornecedor'), col('Em aberto', 'money'), col('Total', 'money')],
+        linhas: (cache.contasPagar.porFornecedor || []).map(function (f) { return [f.nomeFantasia || '', num(f.valorAberto), num(f.valorTotal)]; })
+      };
+      case 'taxa-servico': return cache.taxaServico && {
+        arquivo: 'taxa_servico', titulo: 'Taxa de serviço por garçom',
+        colunas: [col('Garçom'), col('Taxa de serviço', 'money'), col('Comandas', 'int'), col('% do total', 'pct')],
+        linhas: (cache.taxaServico.por_funcionario || []).map(function (f) {
+          return [(f.funcionario && f.funcionario.nome) || '', num(f.total_taxa_servico), num(f.total_comandas), num(f.percentual_do_total)];
+        })
+      };
+      case 'vendas-canal': return cache.vendasCanal && {
+        arquivo: 'vendas_por_canal', titulo: 'Vendas por canal',
+        colunas: [col('Canal'), col('Faturamento', 'money')],
+        linhas: (cache.vendasCanal.graficosFaturamentoPorCanal || []).map(function (c) { return [c.canal || '', num(c.valor)]; })
+      };
+      case 'tempo-entrega': {
+        if (!cache.tempoEntrega) return null;
+        var partes = cache.tempoEntrega, cortes;
+        if (partes.length > 1) {
+          cortes = [];
+          partes.forEach(function (p) {
+            if (!p.data || !p.data.resumo) return;
+            cortes.push(['Loja', nomeLoja(p.empresa), p.data.resumo],
+              ['Loja seg–qui', nomeLoja(p.empresa), p.data.segundaAQuinta || {}],
+              ['Loja sex–dom', nomeLoja(p.empresa), p.data.sextaADomingo || {}]);
+          });
+        } else {
+          var te = partes[0].data || {};
+          cortes = (te.porDiaSemana || []).map(function (d) { return ['Dia', d.diaSemana, d]; })
+            .concat((te.porDistancia || []).map(function (f) { return ['Raio', f.faixaKm, f]; }))
+            .concat((te.porBairro || []).map(function (b) { return ['Bairro', b.bairro, b]; }));
+        }
+        return {
+          arquivo: 'tempo_entrega', titulo: 'Tempo de preparo e entrega (delivery)',
+          colunas: [col('Corte'), col('Faixa'), col('Pedidos', 'int'), col('Preparo (mediana)', 'min'), col('Espera (mediana)', 'min'),
+            col('Rota (mediana)', 'min'), col('Total (mediana)', 'min'), col('Prazo seguro (p90)', 'min')],
+          linhas: cortes.map(function (l) {
+            var b = l[2];
+            return [l[0], l[1], num(b.pedidos), med(b, 'preparo'), med(b, 'esperaDespacho'), med(b, 'rota'), med(b, 'total'), p90(b, 'total')];
+          })
+        };
+      }
+      case 'sazonalidade': {
+        if (!cache.sazonalidade) return null;
+        var linhasSaz = [];
+        sazBlocos(cache.sazonalidade).forEach(function (b) {
+          (b.bloco.grade || []).forEach(function (l) { linhasSaz.push([b.nome, l.semanaDoMes, l.diasDoMes].concat(sazLinhaExport(l))); });
         });
-      });
-      fmt.downloadCSV('producao_semana_do_mes_x_dia (90 dias).csv',
-        ['Produto', 'Semana do mes', 'Dias do mes', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom', 'Media por dia'], linhasSaz);
+        return {
+          arquivo: 'producao_semana_do_mes_x_dia', titulo: 'Programação da produção', semPeriodo: true,
+          colunas: [col('Produto'), col('Semana do mês', 'int'), col('Dias do mês')].concat(SAZ_COLS), linhas: linhasSaz
+        };
+      }
+      case 'producao-7dias': {
+        if (!cache.sazonalidade) return null;
+        var m7 = prod7Modelo(cache.sazonalidade);
+        var cols7 = [col('Item'), col('Categoria')];
+        m7.dias.forEach(function (d) { cols7.push(col(d.rotulo + ' média', 'qty'), col(d.rotulo + ' produzir', 'int')); });
+        return {
+          arquivo: 'producao_proximos_7_dias', titulo: 'Produção dos próximos 7 dias', semPeriodo: true, colunas: cols7,
+          linhas: m7.linhas.map(function (l) {
+            var linha = [l.nome, l.categoria || ''];
+            l.celulas.forEach(function (v) { linha.push(v, v == null || l.pedidos ? null : prod7Sugestao(v)); });
+            return linha;
+          })
+        };
+      }
+      case 'sazonalidade-turno': {
+        if (!cache.sazonalidade || !cache.sazonalidade.turnos) return null;
+        var linhasTurno = [];
+        sazBlocos(cache.sazonalidade).forEach(function (b) {
+          (b.bloco.porTurno || []).forEach(function (t) {
+            (t.grade || []).forEach(function (l) { linhasTurno.push([b.nome, t.label, l.semanaDoMes, l.diasDoMes].concat(sazLinhaExport(l))); });
+          });
+        });
+        return {
+          arquivo: 'producao_por_turno', titulo: 'Programação da produção por horário', semPeriodo: true,
+          colunas: [col('Produto'), col('Turno'), col('Semana do mês', 'int'), col('Dias do mês')].concat(SAZ_COLS), linhas: linhasTurno
+        };
+      }
     }
+    return null;
+  }
+
+  function exportar(which, formato) {
+    var def = exportDef(which);
+    if (!def || !def.linhas.length) return;
+    var nome = def.arquivo + (def.semPeriodo ? ' (90 dias)'
+      : ' (' + fmt.inputDate(state.range.inicio) + '_a_' + fmt.inputDate(state.range.fim) + ')');
+    def.subtitulo = (multi() ? 'Lojas: ' : 'Loja: ') + state.empresas.map(nomeLoja).join(' + ') + ' · ' +
+      (def.semPeriodo ? 'últimos 90 dias' : 'Período: ' + fmt.dateBR(state.range.inicio) + ' a ' + fmt.dateBR(state.range.fim));
+    if (formato === 'csv') fmt.downloadCSV(nome + '.csv', def.colunas.map(function (c) { return c.h; }), def.linhas);
+    else if (formato === 'xlsx') exporter.xlsx(nome + '.xlsx', def);
+    else exporter.pdf(def);
+  }
+
+  function buildExportMenus() {
+    document.querySelectorAll('details.export-menu').forEach(function (d) {
+      d.innerHTML = '<summary class="btn-ghost sm">Exportar</summary><div class="export-pop">' +
+        '<button type="button" data-fmt="xlsx">Excel</button>' +
+        '<button type="button" data-fmt="pdf">PDF</button>' +
+        '<button type="button" data-fmt="csv">CSV</button></div>';
+    });
   }
 
   /* ------------------------------------------------------------- tema */
@@ -894,34 +1225,74 @@
     rerenderAll();
   }
 
-  /* ------------------------------------------------------------- empresa */
+  /* ------------------------------------------------------- lojas (multiloja) */
   function populateEmpresas(lista) {
-    var sel = el('empresa-select');
-    sel.innerHTML = '';
-    lista.forEach(function (e) {
-      var o = document.createElement('option');
-      o.value = e.idEmpresa;
-      o.textContent = (e.fantasia || ('Empresa ' + e.idEmpresa));
-      sel.appendChild(o);
-    });
-    var saved = api.getEmpresaId();
     var ids = lista.map(function (e) { return e.idEmpresa; });
-    var chosen = (saved && ids.indexOf(saved) >= 0) ? saved
-      : (ids.indexOf(cfg.empresaPadrao) >= 0 ? cfg.empresaPadrao : (ids[0] || null));
-    sel.value = chosen;
-    var emp = lista.filter(function (e) { return e.idEmpresa === chosen; })[0] || lista[0];
-    api.setEmpresa(emp);
-    updateEmpresaMeta(emp);
+    var prefs = loadPrefs();
+    var sel = (prefs.empresasSel || []).filter(function (id) { return ids.indexOf(id) >= 0; });
+    if (!sel.length) {
+      var saved = api.getEmpresaId();
+      sel = [(saved && ids.indexOf(saved) >= 0) ? saved : (ids.indexOf(cfg.empresaPadrao) >= 0 ? cfg.empresaPadrao : ids[0])];
+    }
+    state.produtoPor = prefs.produtoPor === 'codigo' ? 'codigo' : 'nome';
+    el('empresa-list').innerHTML = lista.map(function (e) {
+      return '<li data-nome="' + escapeHtml(merge.normNome(nomeLoja(e))) + '">' +
+        '<label><input type="checkbox" value="' + e.idEmpresa + '" /><span>' + escapeHtml(nomeLoja(e)) + '</span></label>' +
+        '<button type="button" class="multi-only" data-only="' + e.idEmpresa + '">só esta</button></li>';
+    }).join('');
+    el('empresa-busca').hidden = lista.length < 8;
+    setEmpresas(sel);
   }
-  function updateEmpresaMeta(emp) {
-    el('empresa-meta').textContent = emp && emp.cnpj ? ('CNPJ ' + emp.cnpj) : '';
-  }
-  function onEmpresaChange() {
-    var sel = el('empresa-select');
-    var id = Number(sel.value);
+
+  // A 1a loja selecionada (ordem da lista) e a "principal": dona da configuracao do painel.
+  function setEmpresas(ids) {
     var lista = cache.empresas || [];
-    var emp = lista.filter(function (e) { return e.idEmpresa === id; })[0];
-    if (emp) { api.setEmpresa(emp); updateEmpresaMeta(emp); loadConfigThenDashboard(); }
+    state.empresas = lista.filter(function (e) { return ids.indexOf(e.idEmpresa) >= 0; }).slice(0, MAX_LOJAS);
+    if (!state.empresas.length) state.empresas = lista.slice(0, 1);
+    api.setEmpresa(state.empresas[0]);
+    var p = loadPrefs();
+    p.empresasSel = state.empresas.map(function (e) { return e.idEmpresa; });
+    p.produtoPor = state.produtoPor;
+    savePrefs(p);
+    var n = state.empresas.length, e0 = state.empresas[0];
+    var nomes = state.empresas.map(nomeLoja).join(' + ');
+    el('empresa-summary').textContent = n === 1 ? nomeLoja(e0) : n + ' lojas';
+    el('empresa-meta').textContent = n === 1 ? (e0.cnpj ? 'CNPJ ' + e0.cnpj : '') : 'dados somados';
+    el('brand-empresa').textContent = nomes;
+    el('brand-empresa').title = nomes;
+    syncEmpresaChecks();
+  }
+
+  // Volta os checkboxes e o "somar por" ao que esta aplicado (descarta marcacao nao aplicada).
+  function syncEmpresaChecks() {
+    var ids = state.empresas.map(function (e) { return e.idEmpresa; });
+    el('empresa-list').querySelectorAll('input').forEach(function (i) { i.checked = ids.indexOf(Number(i.value)) >= 0; });
+    el('produto-por').value = state.produtoPor;
+    el('empresa-busca').value = '';
+    filtrarEmpresas();
+    syncEmpresaCount();
+  }
+  function empresasMarcadas() {
+    return Array.prototype.map.call(el('empresa-list').querySelectorAll('input:checked'), function (i) { return Number(i.value); });
+  }
+  function syncEmpresaCount() {
+    var n = empresasMarcadas().length;
+    el('empresa-count').textContent = n > MAX_LOJAS ? 'Máximo de ' + MAX_LOJAS + ' lojas por vez'
+      : n + (n === 1 ? ' loja marcada' : ' lojas marcadas');
+    el('empresa-aplicar').disabled = n < 1 || n > MAX_LOJAS;
+    el('produto-por').parentNode.hidden = n < 2;
+  }
+  function filtrarEmpresas() {
+    var q = merge.normNome(el('empresa-busca').value);
+    el('empresa-list').querySelectorAll('li').forEach(function (li) {
+      li.hidden = !!q && li.getAttribute('data-nome').indexOf(q) < 0;
+    });
+  }
+  function aplicarEmpresas(ids) {
+    state.produtoPor = el('produto-por').value === 'codigo' ? 'codigo' : 'nome';
+    el('empresa-multi').open = false;
+    setEmpresas(ids);
+    loadConfigThenDashboard();
   }
 
   /* ------------------------------------------------------------- views */
@@ -943,7 +1314,6 @@
       }
       cache.empresas = lista;
       populateEmpresas(lista);
-      el('brand-empresa').textContent = (api.getSession().empresa.fantasia || '');
       // periodo inicial: mes atual (sem carregar ainda; a config decide as fontes)
       state.preset = 'mes';
       state.range = computeRange('mes');
@@ -988,9 +1358,38 @@
     el('btn-logout').addEventListener('click', doLogout);
     el('btn-refresh').addEventListener('click', function () { loadDashboard(); });
     el('theme-toggle').addEventListener('click', toggleTheme);
-    el('empresa-select').addEventListener('change', onEmpresaChange);
     el('btn-aplicar').addEventListener('click', applyCustom);
     el('saz-select').addEventListener('change', renderSazonalidadeGrade);
+    el('saz-turno-select').addEventListener('change', renderSazonalidadeTurnos);
+    el('prod7-turno').addEventListener('change', renderProducao7);
+
+    // seletor de lojas
+    el('empresa-multi').addEventListener('toggle', function () {
+      if (!el('empresa-multi').open) return;
+      syncEmpresaChecks();
+      if (!el('empresa-busca').hidden) el('empresa-busca').focus();
+    });
+    el('empresa-busca').addEventListener('input', filtrarEmpresas);
+    el('empresa-list').addEventListener('change', syncEmpresaCount);
+    el('empresa-list').addEventListener('click', function (ev) {
+      var so = ev.target.getAttribute && ev.target.getAttribute('data-only');
+      if (so) aplicarEmpresas([Number(so)]);
+    });
+    el('empresa-aplicar').addEventListener('click', function () { aplicarEmpresas(empresasMarcadas()); });
+
+    // exportacao e fechamento dos menus (clique fora / Esc)
+    buildExportMenus();
+    document.addEventListener('click', function (ev) {
+      var b = ev.target.closest ? ev.target.closest('[data-fmt]') : null;
+      if (b) {
+        var menu = b.closest('details.export-menu');
+        exportar(menu.getAttribute('data-export'), b.getAttribute('data-fmt'));
+        menu.open = false;
+      }
+      document.querySelectorAll('details.multi[open], details.export-menu[open]').forEach(function (d) {
+        if (!d.contains(ev.target)) d.open = false;
+      });
+    });
 
     // painel de configuracao
     el('btn-config').addEventListener('click', openConfig);
@@ -1000,14 +1399,13 @@
     el('config-list').addEventListener('click', onConfigListClick);
     document.querySelectorAll('[data-config-close]').forEach(function (b) { b.addEventListener('click', closeConfig); });
     document.addEventListener('keydown', function (ev) {
-      if (ev.key === 'Escape' && !el('config-modal').hidden) closeConfig();
+      if (ev.key !== 'Escape') return;
+      if (!el('config-modal').hidden) closeConfig();
+      document.querySelectorAll('details.multi[open], details.export-menu[open]').forEach(function (d) { d.open = false; });
     });
 
     document.querySelectorAll('[data-range]').forEach(function (b) {
       b.addEventListener('click', function () { applyPreset(b.getAttribute('data-range')); });
-    });
-    document.querySelectorAll('[data-export]').forEach(function (b) {
-      b.addEventListener('click', function () { exportCSV(b.getAttribute('data-export')); });
     });
     document.addEventListener('click', function (ev) {
       if (ev.target && ev.target.getAttribute && ev.target.getAttribute('data-retry')) loadDashboard();

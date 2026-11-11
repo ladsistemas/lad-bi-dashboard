@@ -37,6 +37,32 @@ O botão **⚙ (Configurar painel)** no topo abre um painel onde o usuário **li
 | Produtos e motivos mais cancelados | reusa `GET /api/v1/llm/cancelamentos` |
 | Tempo de preparo e entrega (delivery): por dia da semana e por raio em km (ou bairro) | `GET /api/v1/llm/kds/tempo-entrega` |
 | Programação da produção: média por semana do mês × dia da semana (sempre os últimos 90 dias) | `GET /api/v1/llm/vendas/sazonalidade-produtos` |
+| Programação da produção por horário: a mesma grade, uma por turno do dashboard KDS (padrão Manhã/Almoço 06H-16H e Noite/Janta 16H-06H) | mesmo endpoint com `porTurno=true` |
+| Produção dos próximos 7 dias: média da célula (semana do mês × dia) de cada dia + 15% de folga, arredondada para cima; dia inteiro ou por turno | mesmo endpoint |
+
+---
+
+## Multiloja
+
+O seletor de lojas no topo aceita **várias lojas marcadas** (até 12). Com 2 ou mais, cada relatório é buscado em cada loja e **somado no navegador** (`assets/js/merge.js`); com 1 loja a resposta da API é usada como veio.
+
+- **Produto** não é somado por `id_produto` (cada loja tem o seu). A opção **"Somar produtos das lojas por"** escolhe **nome** (sem acento/caixa/espaço duplo) ou **código** do cadastro. Garçom, cliente, fornecedor e forma de pagamento agrupam pelo nome.
+- Cancelamentos e "produto por garçom" agrupam produto sempre pelo nome (a API não devolve o código neles).
+- Percentual, ticket médio e margem são **recalculados** sobre o total somado.
+- **Tempo de entrega** não é somado (mediana e p90 não se somam): vira um comparativo, uma linha por loja.
+- Programação da produção: cada célula é a soma da média de cada loja.
+- A configuração do painel (⚙) usada e salva é a da **primeira loja marcada**.
+- Com várias lojas o caixa é pedido com `limiteRanking=2000`, para somar a lista inteira de produtos e não só o top 20 de cada loja (precisa do lad-bi 4.8.27 ou mais novo; antes dele, em período com um caixa só, a soma usa o top 10 de cada loja).
+
+## Exportar (Excel, PDF, CSV)
+
+Toda tabela/gráfico com dados tem o menu **Exportar** (`assets/js/exporter.js`, sem biblioteca externa):
+
+- **Excel**: `.xlsx` de verdade, com número como número e formato de moeda/percentual.
+- **PDF**: abre a impressão do navegador com a tabela formatada; escolher "Salvar como PDF".
+- **CSV**: como antes.
+
+O Excel e o PDF levam as lojas e o período no cabeçalho; o CSV leva o período no nome do arquivo.
 
 ### Onde a config é guardada (backend)
 
@@ -76,8 +102,11 @@ lad-bi-dashboard/
 │       ├── widgets.js      # << catálogo de widgets (o que pode ligar/desligar)
 │       ├── format.js       # moeda, datas, CSV
 │       ├── api.js          # login/refresh + chamadas dos relatórios
+│       ├── merge.js        # consolidação multiloja (soma das respostas de cada loja)
+│       ├── exporter.js     # exportação Excel (.xlsx) e PDF (impressão)
 │       ├── charts.js       # gráficos (Chart.js)
 │       └── app.js          # orquestração da tela
+├── test/merge.test.js      # check da consolidação e do xlsx: `node test/merge.test.js`
 └── README.md
 ```
 
@@ -144,7 +173,7 @@ Depois acesse `http://localhost:8080`.
 4. **Enviar os arquivos** (mantendo a estrutura de pastas):
 
    ```bash
-   aws s3 sync . s3://SEU-BUCKET --exclude ".git/*" --exclude "README.md"
+   aws s3 sync . s3://SEU-BUCKET --exclude ".git/*" --exclude "README.md" --exclude "test/*"
    ```
 
    > Não use `--acl public-read`: buckets criados a partir de abr/2023 vêm com ACLs desabilitadas

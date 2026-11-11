@@ -27,7 +27,9 @@ window.LADBI = window.LADBI || {};
     { id: 'taxa-servico',     titulo: 'Taxa de serviço por garçom',        categoria: 'Financeiro',     cardId: 'card-taxa-servico',  sources: ['taxaServico'],     defaultVisible: false },
     { id: 'vendas-canal',     titulo: 'Vendas por canal',                  categoria: 'Operação',       cardId: 'card-vendas-canal',  sources: ['vendasCanal'],     defaultVisible: false },
     { id: 'tempo-entrega',    titulo: 'Tempo de preparo e entrega (delivery)', categoria: 'Operação',   cardId: 'card-tempo-entrega', sources: ['tempoEntrega'],    defaultVisible: false },
-    { id: 'sazonalidade',     titulo: 'Programação da produção (semana do mês × dia)', categoria: 'Operação', cardId: 'card-sazonalidade', sources: ['sazonalidade'], defaultVisible: false }
+    { id: 'sazonalidade',     titulo: 'Programação da produção (semana do mês × dia)', categoria: 'Operação', cardId: 'card-sazonalidade', sources: ['sazonalidade'], defaultVisible: false },
+    { id: 'sazonalidade-turno', titulo: 'Programação da produção por horário (turno)', categoria: 'Operação', cardId: 'card-sazonalidade-turno', sources: ['sazonalidade'], defaultVisible: false },
+    { id: 'producao-7dias',   titulo: 'Produção dos próximos 7 dias',      categoria: 'Operação',       cardId: 'card-producao-7dias', sources: ['sazonalidade'], defaultVisible: false }
   ];
 
   var byId = {};

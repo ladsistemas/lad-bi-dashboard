@@ -162,7 +162,8 @@ window.LADBI = window.LADBI || {};
   function caixaRelatorio(p) {
     return authedGet('/api/v1/llm/caixa/relatorio' + qs({
       idEmpresa: p.idEmpresa, dataInicio: p.dataInicio, dataFim: p.dataFim,
-      resumido: (p.resumido === undefined ? true : p.resumido)
+      resumido: (p.resumido === undefined ? true : p.resumido),
+      limiteRanking: p.limiteRanking
     }));
   }
   function cancelamentos(p) {
@@ -212,7 +213,7 @@ window.LADBI = window.LADBI || {};
   // Sem datas: o servidor usa os ultimos 90 dias completos.
   function sazonalidadeProdutos(p) {
     return authedGet('/api/v1/llm/vendas/sazonalidade-produtos' + qs({
-      idEmpresa: p.idEmpresa, agrupar: p.agrupar, limite: p.limite
+      idEmpresa: p.idEmpresa, agrupar: p.agrupar, limite: p.limite, porTurno: p.porTurno
     }));
   }
 
