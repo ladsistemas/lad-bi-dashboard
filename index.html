@@ -12,7 +12,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="assets/css/styles.css?v=1.3" />
+  <link rel="stylesheet" href="assets/css/styles.css?v=1.4" />
 </head>
 
 <body>
@@ -28,7 +28,8 @@
           <li>Ranking de garçons e produtos</li>
           <li>Cancelamentos por garçom</li>
           <li>Ticket médio por cliente</li>
-          <li>Filtro por período</li>
+          <li>Várias lojas somadas em um painel</li>
+          <li>Filtro por período · Excel e PDF</li>
         </ul>
       </div>
     </div>
@@ -64,13 +65,29 @@
       <div class="brand">
         <div class="logo"><img src="assets/img/lad-symbol.png" alt="LAD FOOD" /></div>
         <div class="brand-txt">
-          <span class="wm"><span class="wm-box">LAD</span><span class="wm-accent">BI</span></span> <small id="app-ver" style="opacity:.55;font-size:11px;margin-left:6px">v1.3</small>
+          <span class="wm"><span class="wm-box">LAD</span><span class="wm-accent">BI</span></span> <small id="app-ver" style="opacity:.55;font-size:11px;margin-left:6px">v1.4</small>
           <span id="brand-empresa"></span>
         </div>
       </div>
       <div class="top-controls">
         <div class="empresa-box">
-          <select id="empresa-select" aria-label="Empresa"></select>
+          <details class="multi" id="empresa-multi">
+            <summary id="empresa-summary" aria-label="Lojas">…</summary>
+            <div class="multi-pop">
+              <input id="empresa-busca" type="search" placeholder="Buscar loja…" aria-label="Buscar loja" />
+              <ul class="multi-list" id="empresa-list"></ul>
+              <label class="multi-opt">Somar produtos das lojas por
+                <select id="produto-por" class="card-select">
+                  <option value="nome">Nome</option>
+                  <option value="codigo">Código</option>
+                </select>
+              </label>
+              <div class="multi-foot">
+                <span id="empresa-count"></span>
+                <button type="button" class="btn-soft" id="empresa-aplicar">Aplicar</button>
+              </div>
+            </div>
+          </details>
           <small id="empresa-meta"></small>
         </div>
         <button id="btn-config" class="icon-btn" title="Configurar painel" aria-label="Configurar painel">⚙</button>
@@ -143,7 +160,7 @@
               <h3>Quanto cada garçom vende</h3>
               <p class="card-sub">Ranking por valor vendido no período (top 15)</p>
             </div>
-            <button class="btn-ghost sm" data-export="vendedores">CSV</button>
+            <details class="export-menu" data-export="vendedores"></details>
           </div>
           <div class="card-body chart-body"><canvas id="chart-vendedores"></canvas></div>
           <div class="card-overlay" hidden></div>
@@ -156,6 +173,7 @@
               <h3>Formas de pagamento</h3>
               <p class="card-sub">Recebimentos do período</p>
             </div>
+            <details class="export-menu" data-export="formas"></details>
           </div>
           <div class="card-body chart-body"><canvas id="chart-formas"></canvas></div>
           <div class="card-overlay" hidden></div>
@@ -168,6 +186,7 @@
               <h3>Produtos mais vendidos</h3>
               <p class="card-sub">Top 10 por valor</p>
             </div>
+            <details class="export-menu" data-export="produtos-top"></details>
           </div>
           <div class="card-body chart-body"><canvas id="chart-produtos-top"></canvas></div>
           <div class="card-overlay" hidden></div>
@@ -180,6 +199,7 @@
               <h3>Produtos menos vendidos</h3>
               <p class="card-sub">Menor giro (inclui itens sem venda)</p>
             </div>
+            <details class="export-menu" data-export="produtos-bottom"></details>
           </div>
           <div class="card-body chart-body"><canvas id="chart-produtos-bottom"></canvas></div>
           <div class="card-overlay" hidden></div>
@@ -192,7 +212,7 @@
               <h3>Garçom que mais cancela</h3>
               <p class="card-sub">Valor cancelado e % de cada um (top 15)</p>
             </div>
-            <button class="btn-ghost sm" data-export="cancel">CSV</button>
+            <details class="export-menu" data-export="cancel"></details>
           </div>
           <div class="card-body chart-body tall"><canvas id="chart-cancel"></canvas></div>
           <div class="card-overlay" hidden></div>
@@ -205,7 +225,7 @@
               <h3>O produto que cada garçom mais vende</h3>
               <p class="card-sub">Produto campeão de cada garçom no período</p>
             </div>
-            <button class="btn-ghost sm" data-export="produto-vendedor">CSV</button>
+            <details class="export-menu" data-export="produto-vendedor"></details>
           </div>
           <div class="card-body table-body">
             <table class="data-table">
@@ -231,7 +251,7 @@
               <h3>Ticket médio por cliente</h3>
               <p class="card-sub">Clientes do fiado / conta corrente</p>
             </div>
-            <button class="btn-ghost sm" data-export="conta-cliente">CSV</button>
+            <details class="export-menu" data-export="conta-cliente"></details>
           </div>
           <div class="card-body table-body">
             <table class="data-table">
@@ -319,7 +339,7 @@
               <h3>Tempo de preparo e entrega (delivery)</h3>
               <p class="card-sub">Minutos por pedido. Tempo normal = mediana · Prazo seguro = 9 em cada 10 pedidos chegam antes</p>
             </div>
-            <button class="btn-ghost sm" data-export="tempo-entrega">CSV</button>
+            <details class="export-menu" data-export="tempo-entrega"></details>
           </div>
           <div class="card-body">
             <div class="mini-stats" id="tempo-entrega-stats"></div>
@@ -328,7 +348,7 @@
                 <table class="data-table">
                   <thead>
                     <tr>
-                      <th>Dia</th>
+                      <th id="tempo-dia-col">Dia</th>
                       <th class="num">Pedidos</th>
                       <th class="num">Preparo</th>
                       <th class="num">Espera</th>
@@ -361,7 +381,7 @@
             </div>
             <div class="card-tools">
               <select id="saz-select" class="card-select" aria-label="Produto"></select>
-              <button class="btn-ghost sm" data-export="sazonalidade">CSV</button>
+              <details class="export-menu" data-export="sazonalidade"></details>
             </div>
           </div>
           <div class="card-body table-body">
@@ -386,6 +406,47 @@
           <div class="card-overlay" hidden></div>
         </section>
 
+        <!-- Programacao da producao por horario: a mesma grade, uma por turno -->
+        <section class="card span-12" id="card-sazonalidade-turno" hidden>
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Programação da produção por horário</h3>
+              <p class="card-sub">Média vendida por dia em cada turno · semana do mês × dia da semana · últimos 90 dias</p>
+            </div>
+            <div class="card-tools">
+              <select id="saz-turno-select" class="card-select" aria-label="Produto"></select>
+              <details class="export-menu" data-export="sazonalidade-turno"></details>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="split-tables" id="saz-turno-tabelas"></div>
+            <p class="card-sub" id="saz-turno-nota"></p>
+          </div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
+        <!-- Producao dos proximos 7 dias: a celula (semana do mes x dia) de cada dia + folga -->
+        <section class="card span-12" id="card-producao-7dias" hidden>
+          <div class="card-head">
+            <div class="card-titles">
+              <h3>Produção dos próximos 7 dias</h3>
+              <p class="card-sub">Média do mesmo dia da semana na mesma semana do mês (últimos 90 dias) + 15% de folga, arredondada para cima</p>
+            </div>
+            <div class="card-tools">
+              <select id="prod7-turno" class="card-select" aria-label="Turno"></select>
+              <details class="export-menu" data-export="producao-7dias"></details>
+            </div>
+          </div>
+          <div class="card-body table-body">
+            <table class="data-table prod7-table">
+              <thead id="prod7-head"></thead>
+              <tbody id="tbl-prod7"></tbody>
+            </table>
+            <p class="card-sub" id="prod7-nota"></p>
+          </div>
+          <div class="card-overlay" hidden></div>
+        </section>
+
         <!-- Produtos / motivos mais cancelados (reusa o fetch de cancelamentos) -->
         <section class="card span-6" id="card-cancel-produtos" hidden>
           <div class="card-head">
@@ -393,6 +454,7 @@
               <h3>Produtos e motivos mais cancelados</h3>
               <p class="card-sub">Itens com maior valor cancelado no período</p>
             </div>
+            <details class="export-menu" data-export="cancel-produtos"></details>
           </div>
           <div class="card-body table-body">
             <table class="data-table">
@@ -429,7 +491,7 @@
       <div class="modal-head">
         <div>
           <h3 id="config-title">Configurar painel</h3>
-          <p class="modal-sub">Escolha quais indicadores aparecem e em que ordem. A configuração vale para toda a empresa.</p>
+          <p class="modal-sub" id="config-sub">Escolha quais indicadores aparecem e em que ordem. A configuração vale para toda a empresa.</p>
         </div>
         <button class="icon-btn" id="config-close" title="Fechar" aria-label="Fechar">✕</button>
       </div>
@@ -450,11 +512,13 @@
        Se o arquivo faltar, as tabelas continuam funcionando. -->
   <script src="assets/vendor/chart.umd.min.js"></script>
   <script src="assets/js/config.js"></script>
-  <script src="assets/js/widgets.js?v=1.3"></script>
+  <script src="assets/js/widgets.js?v=1.4"></script>
   <script src="assets/js/format.js"></script>
-  <script src="assets/js/api.js?v=1.3"></script>
+  <script src="assets/js/api.js?v=1.4"></script>
+  <script src="assets/js/merge.js?v=1.4"></script>
+  <script src="assets/js/exporter.js?v=1.4"></script>
   <script src="assets/js/charts.js"></script>
-  <script src="assets/js/app.js?v=1.3"></script>
+  <script src="assets/js/app.js?v=1.4"></script>
   <script>
     // espelha a URL da API no rodape
     document.addEventListener('DOMContentLoaded', function () {
