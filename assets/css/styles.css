@@ -152,6 +152,8 @@ body.dark .login-error { color: #fca5a5; }
 .btn-spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .4); border-top-color: #fff; display: none; animation: spin .7s linear infinite; }
 .btn-primary.loading .btn-spin { display: inline-block; }
 .btn-primary.loading .btn-label { opacity: .85; }
+.login-remember { display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; font-size: 13px; color: var(--text-soft); cursor: pointer; }
+.login-remember input { accent-color: var(--primary); width: 15px; height: 15px; margin: 0; }
 .login-foot { text-align: center; color: var(--text-faint); font-size: 12px; margin: 18px 0 0; }
 
 @keyframes spin { to { transform: rotate(360deg); } }

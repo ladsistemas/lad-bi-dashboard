@@ -1,6 +1,7 @@
 /* ==========================================================================
  * Cliente da API LAD BI: autenticacao (login/refresh), sessao e endpoints.
- * Usa apenas fetch nativo. Token guardado em localStorage.
+ * Usa apenas fetch nativo. Token guardado em localStorage ("Lembrar de mim") ou em
+ * sessionStorage (some ao fechar o navegador). A senha nunca e guardada.
  * ========================================================================== */
 window.LADBI = window.LADBI || {};
 
@@ -8,12 +9,15 @@ window.LADBI = window.LADBI || {};
   var cfg = LADBI.config;
   var KEY = cfg.storageKey;
 
+  // onde a sessao mora: sessionStorage quando o login foi feito sem "Lembrar de mim"
+  var guarda = sessionStorage.getItem(KEY) ? sessionStorage : localStorage;
+
   function loadSession() {
-    try { return JSON.parse(localStorage.getItem(KEY)) || null; }
+    try { return JSON.parse(guarda.getItem(KEY)) || null; }
     catch (e) { return null; }
   }
-  function saveSession(s) { localStorage.setItem(KEY, JSON.stringify(s)); }
-  function clearSession() { localStorage.removeItem(KEY); }
+  function saveSession(s) { guarda.setItem(KEY, JSON.stringify(s)); }
+  function clearSession() { localStorage.removeItem(KEY); sessionStorage.removeItem(KEY); }
 
   var session = loadSession();
   var refreshing = null; // promessa em andamento (evita refresh concorrente)
@@ -43,7 +47,7 @@ window.LADBI = window.LADBI || {};
     });
   }
 
-  function login(email, senha) {
+  function login(email, senha, lembrar) {
     return fetch(cfg.apiBase + '/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -56,6 +60,8 @@ window.LADBI = window.LADBI || {};
       }
       return res.json();
     }).then(function (data) {
+      clearSession();
+      guarda = lembrar === false ? sessionStorage : localStorage;
       session = {
         accessToken: data.access_token,
         refreshToken: data.refresh_token,

@@ -1301,7 +1301,11 @@
     el('login-error').textContent = msg || '';
     el('login-error').hidden = !msg;
     el('login-api').textContent = cfg.apiBase;
-    el('login-email').focus();
+    // "Lembrar de mim": volta o e-mail (a senha fica por conta do navegador)
+    var p = loadPrefs();
+    el('login-lembrar').checked = p.lembrar !== false;
+    if (!el('login-email').value && p.email) el('login-email').value = p.email;
+    el(el('login-email').value ? 'login-senha' : 'login-email').focus();
   }
 
   function enterApp() {
@@ -1333,7 +1337,12 @@
     var btn = el('login-submit');
     btn.disabled = true; btn.classList.add('loading');
     el('login-error').hidden = true;
-    api.login(email, senha).then(function () {
+    var lembrar = el('login-lembrar').checked;
+    api.login(email, senha, lembrar).then(function () {
+      var p = loadPrefs();
+      p.lembrar = lembrar;
+      if (lembrar) p.email = email; else delete p.email;
+      savePrefs(p);
       el('login-senha').value = '';
       return enterApp();
     }).catch(function (e) {
