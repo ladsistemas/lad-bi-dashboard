@@ -79,7 +79,8 @@ O front fala **apenas com o `biapi` (lad_bi)** — reusa o mesmo login/token/COR
 ## Como funciona o login
 
 - A tela de login chama `POST /auth/login` com **e-mail e senha do LADFood** e recebe um **JWT** (`access_token` + `refresh_token`).
-- O token fica no `localStorage` do navegador e é renovado automaticamente (via `POST /auth/refresh`) quando expira.
+- O token é renovado automaticamente (via `POST /auth/refresh`) quando expira.
+- **Lembrar de mim neste dispositivo** (marcado por padrão): o token fica no `localStorage` e o e-mail volta preenchido no próximo login. Desmarcado, o token fica no `sessionStorage` (a sessão acaba ao fechar o navegador) e o e-mail não é guardado. A senha nunca é guardada pelo painel; quem oferece salvar é o gerenciador de senhas do navegador.
 - Depois do login, o painel lista as empresas do usuário (`GET /auth/empresas`) e permite trocar de empresa no topo.
 - Nenhuma credencial trafega para terceiros — apenas para a própria API LAD BI.
 
@@ -199,7 +200,7 @@ Depois acesse `http://localhost:8080`.
 
 ## Segurança
 
-- O token JWT fica no `localStorage` (padrão para SPAs internas). Use HTTPS (CloudFront) em produção.
+- O token JWT fica no `localStorage` (padrão para SPAs internas) ou, sem "Lembrar de mim", no `sessionStorage`. Em computador compartilhado, desmarque a opção. Use HTTPS (CloudFront) em produção.
 - Cada usuário só enxerga as empresas e relatórios que sua conta LADFood já permite — a API valida permissão a cada chamada.
 - Botão **Sair** apaga o token do navegador.
 
