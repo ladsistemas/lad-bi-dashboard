@@ -52,9 +52,9 @@
     if (type === 'loading') {
       ov.innerHTML = '<div class="spinner"></div><span>Carregando…</span>';
     } else if (type === 'empty') {
-      ov.innerHTML = '<div class="state-ic">◍</div><span>' + (msg || 'Sem dados neste periodo.') + '</span>';
+      ov.innerHTML = '<div class="state-ic">◍</div><span>' + escapeHtml(msg || 'Sem dados neste periodo.') + '</span>';
     } else {
-      ov.innerHTML = '<div class="state-ic err">!</div><span>' + (msg || 'Erro ao carregar.') + '</span>' +
+      ov.innerHTML = '<div class="state-ic err">!</div><span>' + escapeHtml(msg || 'Erro ao carregar.') + '</span>' +
         '<button class="btn-ghost sm" data-retry="1">Tentar de novo</button>';
     }
   }
@@ -320,7 +320,7 @@
           ? { resumo_geral: parts[0].data.resumo, ranking_consolidado: parts[0].data.rc }
           : merge.caixa(parts, { produtoPor: state.produtoPor });
         if (visible('kpis')) renderKpiCaixa(c.resumo_geral);
-        if (!c.ranking_consolidado || !num(c.resumo_geral.totalComandas)) {
+        if (parts.every(function (p) { return !p.data.rc; })) {
           CAIXA_CARDS.forEach(function (card) { if (visible(card.id)) setState(card.card, 'empty'); });
           return;
         }
@@ -417,8 +417,8 @@
     // multiloja: lista maior por loja, para o produto fora do top de uma delas nao ficar sem a parte dela
     porLoja(function (id) { return api.sazonalidadeProdutos({ idEmpresa: id, limite: multi() ? 200 : 40, porTurno: comTurno || undefined }); })
       .then(function (parts) {
-        if (stale(gen)) return;
         sazCache = { ids: ids, comTurno: comTurno, parts: parts };
+        if (stale(gen)) return;
         renderSazonalidade(parts);
       })
       .catch(function (e) {
@@ -870,7 +870,7 @@
     return out;
   }
   // media + folga, para cima (o epsilon evita 69,0000001 virar 70)
-  function prod7Sugestao(media) { return Math.ceil(media * (1 + PROD7_FOLGA) - 1e-9); }
+  function prod7Sugestao(media) { return Math.ceil(media * (1 + PROD7_FOLGA) - 1e-9) || 0; }
 
   function prod7PreencherTurnos(data) {
     var sel = el('prod7-turno'), atual = sel.value, turnos = data.turnos || [];
@@ -1089,6 +1089,33 @@
         arquivo: 'ticket_medio_cliente', titulo: 'Ticket médio por cliente',
         colunas: [col('Cliente'), col('Ticket médio', 'money'), col('Nº contas', 'int'), col('Valor total', 'money'), col('Saldo em aberto', 'money')],
         linhas: cache.contaCliente.map(function (c) { return [c.nomeCliente || '', num(c.ticketMedio), num(c.totalContas), num(c.valorTotal), num(c.saldoAberto)]; })
+      };
+      case 'dre': {
+        var dr = cache.dre && cache.dre.resumo;
+        return dr && {
+          arquivo: 'dre', titulo: 'DRE / Resultado do período',
+          colunas: [col('Receita bruta', 'money'), col('Receita líquida', 'money'), col('Despesas', 'money'),
+            col('Resultado líquido', 'money'), col('Margem', 'pct')],
+          linhas: [[dr.receitaBruta, dr.receitaLiquida, dr.totalDespesas, dr.resultadoLiquido,
+            dr.margemLiquida != null ? dr.margemLiquida : dr.margemOperacional]]
+        };
+      }
+      case 'contas-pagar': return cache.contasPagar && {
+        arquivo: 'contas_a_pagar', titulo: 'Contas a pagar por fornecedor',
+        colunas: [col('Fornecedor'), col('Em aberto', 'money'), col('Total', 'money')],
+        linhas: (cache.contasPagar.porFornecedor || []).map(function (f) { return [f.nomeFantasia || '', num(f.valorAberto), num(f.valorTotal)]; })
+      };
+      case 'taxa-servico': return cache.taxaServico && {
+        arquivo: 'taxa_servico', titulo: 'Taxa de serviço por garçom',
+        colunas: [col('Garçom'), col('Taxa de serviço', 'money'), col('Comandas', 'int'), col('% do total', 'pct')],
+        linhas: (cache.taxaServico.por_funcionario || []).map(function (f) {
+          return [(f.funcionario && f.funcionario.nome) || '', num(f.total_taxa_servico), num(f.total_comandas), num(f.percentual_do_total)];
+        })
+      };
+      case 'vendas-canal': return cache.vendasCanal && {
+        arquivo: 'vendas_por_canal', titulo: 'Vendas por canal',
+        colunas: [col('Canal'), col('Faturamento', 'money')],
+        linhas: (cache.vendasCanal.graficosFaturamentoPorCanal || []).map(function (c) { return [c.canal || '', num(c.valor)]; })
       };
       case 'tempo-entrega': {
         if (!cache.tempoEntrega) return null;

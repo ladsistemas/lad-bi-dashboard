@@ -56,7 +56,7 @@ window.LADBI = window.LADBI || {};
 
   /* ------------------------------------------------------------------- xlsx */
   function xml(s) {
-    return String(s).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '').replace(/[<>&"]/g, function (c) {
+    return String(s).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]/g, '').replace(/[<>&"]/g, function (c) {
       return ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c];
     });
   }
@@ -191,9 +191,10 @@ window.LADBI = window.LADBI || {};
       var antes = document.title;
       document.title = def.titulo;
       var w = fr.contentWindow;
-      w.onafterprint = function () { document.title = antes; };
+      var limpar = function () { document.title = antes; setTimeout(function () { fr.remove(); }, 1000); };
+      w.onafterprint = limpar;
       w.focus(); w.print();
-      setTimeout(function () { document.title = antes; fr.remove(); }, 60000);
+      setTimeout(limpar, 600000); // navegador que nao avisa o fim da impressao
     };
     fr.srcdoc = doc;
     document.body.appendChild(fr);

@@ -52,7 +52,7 @@ O seletor de lojas no topo aceita **várias lojas marcadas** (até 12). Com 2 ou
 - **Tempo de entrega** não é somado (mediana e p90 não se somam): vira um comparativo, uma linha por loja.
 - Programação da produção: cada célula é a soma da média de cada loja.
 - A configuração do painel (⚙) usada e salva é a da **primeira loja marcada**.
-- Com várias lojas o caixa é pedido com `limiteRanking=2000`, para somar a lista inteira de produtos e não só o top 20 de cada loja.
+- Com várias lojas o caixa é pedido com `limiteRanking=2000`, para somar a lista inteira de produtos e não só o top 20 de cada loja (precisa do lad-bi 4.8.27 ou mais novo; antes dele, em período com um caixa só, a soma usa o top 10 de cada loja).
 
 ## Exportar (Excel, PDF, CSV)
 
@@ -62,7 +62,7 @@ Toda tabela/gráfico com dados tem o menu **Exportar** (`assets/js/exporter.js`,
 - **PDF**: abre a impressão do navegador com a tabela formatada; escolher "Salvar como PDF".
 - **CSV**: como antes.
 
-O arquivo leva as lojas e o período no cabeçalho.
+O Excel e o PDF levam as lojas e o período no cabeçalho; o CSV leva o período no nome do arquivo.
 
 ### Onde a config é guardada (backend)
 

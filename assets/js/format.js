@@ -66,6 +66,8 @@ window.LADBI = window.LADBI || {};
       var sep = ';'; // Excel pt-BR usa ; como separador
       function esc(cell) {
         var s = (cell == null ? '' : String(cell));
+        // texto que comeca com = + - @ abriria como formula no Excel ("+ Bacon" vira #NOME?)
+        if (typeof cell === 'string' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
         if (s.indexOf('"') >= 0 || s.indexOf(sep) >= 0 || s.indexOf('\n') >= 0) {
           s = '"' + s.replace(/"/g, '""') + '"';
         }

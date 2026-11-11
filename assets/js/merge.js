@@ -188,10 +188,12 @@ window.LADBI = window.LADBI || {};
     var resumos = parts.map(function (p) { return (p.data || {}).resumo || {}; });
     var resumo = somaCampos(resumos, ['total_taxa_servico', 'total_comandas']);
     resumo.ticket_medio_taxa = resumo.total_comandas ? resumo.total_taxa_servico / resumo.total_comandas : 0;
-    // % medio de cada loja ponderado pelas comandas dela
-    resumo.percentual_medio = resumo.total_comandas
-      ? resumos.reduce(function (s, r) { return s + num(r.percentual_medio) * num(r.total_comandas); }, 0) / resumo.total_comandas
-      : 0;
+    // % medio = taxa somada / base somada; a base de cada loja sai de taxa / % dela
+    var taxa = 0, base = 0;
+    resumos.forEach(function (r) {
+      if (num(r.percentual_medio) > 0) { taxa += num(r.total_taxa_servico); base += num(r.total_taxa_servico) / num(r.percentual_medio); }
+    });
+    resumo.percentual_medio = base ? taxa / base : 0;
     var func = agrupar(juntar(parts, function (d) { return d.por_funcionario; }),
       function (f) { return normNome(f.funcionario && f.funcionario.nome); }, ['total_taxa_servico', 'total_comandas']);
     func.forEach(function (f) { f.ticket_medio_taxa = f.total_comandas ? f.total_taxa_servico / f.total_comandas : 0; });

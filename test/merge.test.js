@@ -88,7 +88,8 @@ var tx = M.taxaServico([
   { data: { resumo: { total_taxa_servico: 100, total_comandas: 10, percentual_medio: 10 }, por_funcionario: [] } },
   { data: { resumo: { total_taxa_servico: 300, total_comandas: 30, percentual_medio: 12 }, por_funcionario: [] } }]);
 assert.strictEqual(tx.resumo.ticket_medio_taxa, 10);
-assert.strictEqual(tx.resumo.percentual_medio, 11.5);
+// 100 a 10% (base 1000) + 300 a 12% (base 2500) = 400 sobre 3500
+assert.ok(Math.abs(tx.resumo.percentual_medio - 400 / 35) < 1e-9, String(tx.resumo.percentual_medio));
 var dre = M.dre([{ data: { resumo: { receitaLiquida: 100, totalDespesas: 60, resultadoLiquido: 40, margemLiquida: 40 } } },
   { data: { resumo: { receitaLiquida: 100, totalDespesas: 100, resultadoLiquido: 0, margemLiquida: 0 } } }]);
 assert.strictEqual(dre.resumo.margemLiquida, 20);
